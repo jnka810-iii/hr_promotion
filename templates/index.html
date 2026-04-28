@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ระบบบันทึกข้อมูลบุคคลและประเมินผลงานเพื่อเลื่อนระดับตำแหน่ง</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--pr:#1a3a6b;--pr2:#2a5298;--ac:#c8a951;--bg:#f0f3f9}
+*{box-sizing:border-box}
+body{background:var(--bg);font-family:'Sarabun','Segoe UI',sans-serif;font-size:15px;margin:0}
+.hdr{background:linear-gradient(135deg,#1a3a6b,#2a5298);color:#fff;padding:14px 24px 10px;
+     border-bottom:4px solid var(--ac);box-shadow:0 2px 12px rgba(0,0,0,.2)}
+.hdr h4{font-size:1.05rem;margin:0;font-weight:700}
+.hdr small{font-size:.78rem;opacity:.8}
+.mbadge{background:rgba(255,255,255,.15);border-radius:8px;padding:5px 12px;font-size:.75rem;
+        border:1px solid rgba(255,255,255,.25);white-space:nowrap}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
+.dg{background:#22c55e;box-shadow:0 0 0 2px rgba(34,197,94,.3)}
+.dy{background:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.3)}
+.tnav{background:#fff;border-bottom:2px solid #dde3ef;padding:0 16px;position:sticky;top:0;
+      z-index:100;box-shadow:0 2px 6px rgba(0,0,0,.07);display:flex;gap:2px;overflow-x:auto}
+.tbtn{border:none;background:none;padding:11px 18px;font-family:'Sarabun',sans-serif;font-size:.9rem;
+      font-weight:600;color:#666;cursor:pointer;border-bottom:3px solid transparent;transition:.18s;white-space:nowrap}
+.tbtn.active{color:var(--pr);border-bottom-color:var(--ac)}
+.tbtn:hover{color:var(--pr)}
+.sh{background:linear-gradient(90deg,var(--pr),var(--pr2));color:#fff;padding:8px 16px;
+    border-radius:8px 8px 0 0;font-size:.9rem;font-weight:700;letter-spacing:.3px}
+.sb{background:#fff;border:1px solid #dde3ef;border-top:none;border-radius:0 0 8px 8px;
+    padding:18px 20px 14px;margin-bottom:16px}
+.ssh{background:#e8edf7;color:var(--pr);padding:6px 14px;border-radius:6px 6px 0 0;
+     font-size:.85rem;font-weight:700;border:1px solid #c8d3e8;border-bottom:none;margin-top:12px}
+.ssb{background:#fafbff;border:1px solid #c8d3e8;border-radius:0 0 6px 6px;
+     padding:14px 16px 12px;margin-bottom:8px}
+.eval-row{background:linear-gradient(135deg,#f8faff,#eef3ff);border:1px solid #c8d8f0;
+          border-radius:8px;padding:12px 14px;margin-bottom:10px;position:relative;transition:.2s}
+.eval-row:hover{box-shadow:0 3px 10px rgba(26,58,107,.1)}
+.eval-num{display:inline-flex;align-items:center;justify-content:center;background:var(--pr);
+          color:#fff;border-radius:50%;width:22px;height:22px;font-size:.78rem;font-weight:700;margin-right:7px}
+.upload-zone{background:linear-gradient(135deg,#f0f7ff,#e8f0fb);border:2px dashed #90b4e8;
+             border-radius:10px;padding:20px;text-align:center;transition:.3s;cursor:pointer}
+.upload-zone:hover{border-color:#2a5298;background:#e3eeff}
+.upload-zone.has-file{border-style:solid;border-color:#198754;
+                      background:linear-gradient(135deg,#f0fff4,#e8f7ee)}
+.upload-zone.uploading{border-color:#f59e0b;background:#fffbeb;cursor:wait}
+.file-panel{background:#fff;border:1px solid #dde3ef;border-radius:10px;
+            padding:16px 18px;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.file-panel .book-no{display:inline-flex;align-items:center;justify-content:center;
+                     background:var(--pr);color:#fff;border-radius:50%;
+                     width:28px;height:28px;font-size:.85rem;font-weight:700;margin-right:8px}
+.progress-wrap{height:6px;background:#e2e8f0;border-radius:3px;margin-top:8px;display:none}
+.progress-bar-inner{height:100%;background:linear-gradient(90deg,#2a5298,#22c55e);
+                    border-radius:3px;transition:width .3s}
+.form-label{font-weight:600;color:var(--pr);margin-bottom:3px;font-size:.84rem}
+.form-control,.form-select{font-size:.88rem;font-family:'Sarabun',sans-serif;
+                            border-color:#c8d3e8;border-radius:7px;transition:.2s}
+.form-control:focus,.form-select:focus{border-color:var(--pr);
+                                        box-shadow:0 0 0 .2rem rgba(26,58,107,.15)}
+.required::after{content:" *";color:red}
+textarea.form-control{resize:vertical}
+.btn{border-radius:8px;font-family:'Sarabun',sans-serif;transition:transform .15s,box-shadow .15s}
+.btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.15)}
+.btn:active{transform:translateY(0)}
+.btn-save{background:linear-gradient(135deg,var(--pr),var(--pr2));color:#fff;
+          border:none;font-weight:700;padding:8px 28px}
+.btn-save:hover{background:linear-gradient(135deg,#0f2248,var(--pr));color:#fff}
+.btn-add{background:linear-gradient(135deg,#198754,#20c997);color:#fff;border:none;font-size:.85rem}
+.btn-add:hover{background:linear-gradient(135deg,#145c38,#198754);color:#fff}
+#tbl{font-size:.79rem;min-width:950px}
+#tbl thead th{background:linear-gradient(90deg,var(--pr),var(--pr2));color:#fff;
+              white-space:nowrap;font-weight:600;font-size:.77rem;padding:8px 10px}
+#tbl tbody td{vertical-align:middle;padding:7px 10px}
+#tbl tbody tr:hover{background:#f0f5ff}
+.bsm{font-size:.7rem;padding:3px 7px}
+.sc{background:#fff;border-radius:10px;border-left:5px solid var(--ac);padding:18px 20px;
+    box-shadow:0 2px 10px rgba(0,0,0,.08);transition:.2s}
+.sc:hover{transform:translateY(-2px);box-shadow:0 5px 16px rgba(0,0,0,.12)}
+.sc .val{font-size:2.1rem;font-weight:800;line-height:1.1}
+.sc .lbl{font-size:.8rem;color:#888;margin-top:4px}
+.cc{background:#fff;border-radius:10px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+.toast-container{position:fixed;bottom:22px;right:22px;z-index:9999}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="hdr d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <div class="d-flex align-items-center gap-3">
+    <i class="fa fa-landmark fa-2x" style="color:var(--ac)"></i>
+    <div>
+      <h4><i class="fa fa-file-signature me-2"></i>ระบบบันทึกข้อมูลบุคคลและเรื่องที่ผ่านการประเมินผลงานเพื่อเลื่อนระดับตำแหน่ง</h4>
+      <small>Human Resource Management System &nbsp;|&nbsp; Flask + SQLite / LocalStorage Fallback</small>
+    </div>
+  </div>
+  <span class="mbadge" id="mode-badge"><span class="dot dy"></span>กำลังเชื่อมต่อ...</span>
+</div>
+
+<!-- TAB NAV -->
+<div class="tnav">
+  <button class="tbtn active" onclick="showTab('tab-form',this)"><i class="fa fa-edit me-1"></i>กรอกข้อมูล</button>
+  <button class="tbtn" onclick="showTab('tab-list',this)"><i class="fa fa-list me-1"></i>รายการทั้งหมด <span class="badge bg-danger ms-1" id="badge-count">0</span></button>
+  <button class="tbtn" onclick="showTab('tab-dashboard',this)"><i class="fa fa-chart-bar me-1"></i>สรุปภาพรวม</button>
+</div>
+
+<div class="container-fluid px-3 px-md-4 py-3">
+
+<!-- ==================== TAB FORM ==================== -->
+<div id="tab-form">
+<form id="mainForm" novalidate>
+  <input type="hidden" id="rec-id">
+
+  <!-- ส่วนที่ 1 -->
+  <div class="sh"><i class="fa fa-user me-2"></i>ส่วนที่ 1 : ข้อมูลส่วนตัวของบุคคล</div>
+  <div class="sb">
+    <div class="row g-3">
+      <div class="col-6 col-md-2">
+        <label class="form-label required">คำนำหน้า</label>
+        <select class="form-select" id="p1_title" required>
+          <option value="">-- เลือก --</option>
+          <option>นาย</option><option>นาง</option><option>นางสาว</option>
+          <option>ว่าที่ร้อยตรี</option><option>ร้อยตำรวจตรี</option>
+          <option>ร้อยตำรวจโท</option><option>ร้อยตำรวจเอก</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label required">ชื่อ</label>
+        <input type="text" class="form-control" id="p1_fname" required placeholder="ชื่อจริง">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label required">นามสกุล</label>
+        <input type="text" class="form-control" id="p1_lname" required placeholder="นามสกุล">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">วุฒิการศึกษาสูงสุดที่เกี่ยวข้อง</label>
+        <select class="form-select" id="p1_edu">
+          <option value="">-- เลือก --</option>
+          <option>ต่ำกว่าปริญญาตรี</option><option>ปริญญาตรี</option>
+          <option>ปริญญาโท</option><option>ปริญญาเอก</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-5">
+        <label class="form-label">สาขาวิชา</label>
+        <input type="text" class="form-control" id="p1_edu_major" placeholder="เช่น รัฐศาสตร์, นิติศาสตร์">
+      </div>
+    </div>
+  </div>
+
+  <!-- ส่วนที่ 2 -->
+  <div class="sh"><i class="fa fa-briefcase me-2"></i>ส่วนที่ 2 : ข้อมูลตำแหน่งและส่วนราชการ</div>
+  <div class="sb">
+    <div class="row g-3">
+      <div class="col-12 col-md-4">
+        <label class="form-label required">ตำแหน่งปัจจุบัน</label>
+        <input type="text" class="form-control" id="p2_pos_current" required placeholder="เช่น นักวิเคราะห์นโยบายและแผน">
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label required">ระดับตำแหน่งปัจจุบัน</label>
+        <select class="form-select" id="p2_pos_level" required>
+          <option value="">-- เลือก --</option>
+          <option>ปฏิบัติการ</option><option>ชำนาญการ</option>
+          <option>ชำนาญการพิเศษ</option><option>เชี่ยวชาญ</option><option>ทรงคุณวุฒิ</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label required">ตำแหน่งเลขที่</label>
+        <input type="text" class="form-control" id="p2_empid" required>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label required">กลุ่มงาน</label>
+        <input type="text" class="form-control" id="p2_dept" required placeholder="เช่น กลุ่มสรรหาและข้อมูลบุคคล">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label required">สำนัก/กอง/ศูนย์</label>
+        <input type="text" class="form-control" id="p2_sec" required placeholder="เช่น กองการเจ้าหน้าที่">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">กรม / หน่วยงาน</label>
+        <select class="form-select" id="p2_org">
+          <option value="">-- เลือก --</option>
+          <option>สำนักงานปลัดสำนักนายกรัฐมนตรี</option>
+          <option>กรมประชาสัมพันธ์</option>
+          <option>สำนักงานคณะกรรมการคุ้มครองผู้บริโภค</option>
+          <option>อื่น ๆ</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- ส่วนที่ 3 -->
+  <div class="sh"><i class="fa fa-scroll me-2"></i>ส่วนที่ 3 : ข้อมูลตำแหน่งและส่วนราชการที่ได้รับเลือกเพื่อประเมินผลงาน</div>
+  <div class="sb">
+    <div class="row g-3">
+      <div class="col-12 col-md-4">
+        <label class="form-label required">ตำแหน่งที่ได้รับเลือก</label>
+        <input type="text" class="form-control" id="p3_pos" required placeholder="เช่น นักวิเคราะห์นโยบายและแผน">
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label required">ระดับตำแหน่ง</label>
+        <select class="form-select" id="p3_pos_level" required>
+          <option value="">-- เลือก --</option>
+          <option>ปฏิบัติการ</option><option>ชำนาญการ</option>
+          <option>ชำนาญการพิเศษ</option><option>เชี่ยวชาญ</option><option>ทรงคุณวุฒิ</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label required">ตำแหน่งเลขที่</label>
+        <input type="text" class="form-control" id="p3_empid" required>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">กลุ่มงาน</label>
+        <input type="text" class="form-control" id="p3_dept" placeholder="เช่น กลุ่มสรรหาและข้อมูลบุคคล">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">สำนัก/กอง/ศูนย์</label>
+        <input type="text" class="form-control" id="p3_sec" placeholder="เช่น กองการเจ้าหน้าที่">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">กรม / หน่วยงาน</label>
+        <select class="form-select" id="p3_org">
+          <option value="">-- เลือก --</option>
+          <option>สำนักงานปลัดสำนักนายกรัฐมนตรี</option>
+          <option>กรมประชาสัมพันธ์</option>
+          <option>สำนักงานคณะกรรมการคุ้มครองผู้บริโภค</option>
+          <option>อื่น ๆ</option>
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label">หนังสือประกาศคัดเลือกประเมินผลงาน (ประกาศ-เรื่อง)</label>
+        <textarea class="form-control" id="p3_announcement" rows="3"
+          placeholder="ระบุหนังสือ/ประกาศการคัดเลือกเพื่อประเมินผลงานที่เกี่ยวข้อง"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- ส่วนที่ 4 -->
+  <div class="sh"><i class="fa fa-trophy me-2"></i>ส่วนที่ 4 : ผลงานที่เสนอเพื่อประกอบการพิจารณา</div>
+  <div class="sb">
+    <div class="ssh"><i class="fa fa-file-alt me-1"></i>ผลงานที่ผ่านมา</div>
+    <div class="ssb">
+      <div class="row g-3">
+        <div class="col-12 col-md-7">
+          <label class="form-label required">ผลงานที่ผ่านมาเรื่องที่ 1</label>
+          <input type="text" class="form-control" id="p4_work1_title" required placeholder="ชื่อผลงานหลัก เรื่องที่ 1">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">ปีที่จัดทำ (พ.ศ.)</label>
+          <input type="number" class="form-control" id="p4_work1_year" min="2500" max="2600" placeholder="2567">
+        </div>
+        <div class="col-12 col-md-7">
+          <label class="form-label">ผลงานที่ผ่านมาเรื่องที่ 2</label>
+          <input type="text" class="form-control" id="p4_work2_title" placeholder="ชื่อผลงาน เรื่องที่ 2">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">ปีที่จัดทำ (พ.ศ.)</label>
+          <input type="number" class="form-control" id="p4_work2_year" min="2500" max="2600" placeholder="2567">
+        </div>
+        <div class="col-12 col-md-7">
+          <label class="form-label">ผลงานที่ผ่านมาเรื่องที่ 3</label>
+          <input type="text" class="form-control" id="p4_work3_title" placeholder="ชื่อผลงาน เรื่องที่ 3">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">ปีที่จัดทำ (พ.ศ.)</label>
+          <input type="number" class="form-control" id="p4_work3_year" min="2500" max="2600" placeholder="2567">
+        </div>
+      </div>
+    </div>
+    <div class="ssh mt-2"><i class="fa fa-lightbulb me-1"></i>ข้อเสนอแนวคิด</div>
+    <div class="ssb">
+      <div class="row g-3">
+        <div class="col-12 col-md-8">
+          <label class="form-label required">เรื่องที่เป็นข้อเสนอแนวคิด</label>
+          <input type="text" class="form-control" id="p4_concept_title" required placeholder="ชื่อข้อเสนอแนวคิด / นวัตกรรม">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label">รางวัลหรือผลลัพธ์ที่ได้รับ</label>
+          <input type="text" class="form-control" id="p4_work_award" placeholder="เช่น รางวัลดีเด่น, นำไปใช้จริง">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ส่วนที่ 5 -->
+  <div class="sh"><i class="fa fa-star me-2"></i>ส่วนที่ 5 : ผลการประเมินผลงาน</div>
+  <div class="sb">
+    <div class="row g-3 mb-3">
+      <div class="col-12 col-md-4">
+        <label class="form-label">วันที่ได้รับเอกสารเล่มสมบูรณ์</label>
+        <input type="date" class="form-control" id="p5_doc_received">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">ผลการพิจารณาผลงาน / สถานะ</label>
+        <select class="form-select" id="p5_work_result">
+          <option value="">-- เลือก --</option>
+          <option>ผ่าน</option><option>ไม่ผ่าน</option>
+          <option>รอผล</option><option>ขอแก้ไข</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label">คะแนนผลงาน (จาก 100)</label>
+        <input type="number" class="form-control" id="p5_work_score" min="0" max="100" step="0.01">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">วันที่ประเมินผลงาน</label>
+        <input type="date" class="form-control" id="p5_work_eval_date">
+      </div>
+    </div>
+    <div class="ssh mt-2"><i class="fa fa-chart-line me-1"></i>ส่วนที่ 5.1 : คะแนนประเมินผลงานที่เป็นผลการดำเนินงานที่ผ่านมา</div>
+    <div class="ssb">
+      <div id="eval51-container"></div>
+      <button type="button" class="btn btn-add btn-sm mt-2" onclick="addEval51()">
+        <i class="fa fa-plus me-1"></i> เพิ่มรอบการประเมินผลงาน
+      </button>
+    </div>
+    <div class="ssh mt-3"><i class="fa fa-lightbulb me-1"></i>ส่วนที่ 5.2 : คะแนนประเมินข้อเสนอแนวคิด</div>
+    <div class="ssb">
+      <div id="eval52-container"></div>
+      <button type="button" class="btn btn-add btn-sm mt-2" onclick="addEval52()">
+        <i class="fa fa-plus me-1"></i> เพิ่มรอบการประเมินข้อเสนอแนวคิด
+      </button>
+    </div>
+  </div>
+
+  <!-- ส่วนที่ 6 -->
+  <div class="sh"><i class="fa fa-file-pdf me-2"></i>ส่วนที่ 6 : ไฟล์เล่มผลงานฉบับสมบูรณ์</div>
+  <div class="sb">
+    <div id="file-container"></div>
+    <div class="row g-3 mt-3 pt-3 border-top">
+      <div class="col-12 col-md-6">
+        <button type="button" class="btn btn-outline-success w-100" onclick="exportAllCSV()">
+          <i class="fa fa-file-csv me-2"></i>Export ข้อมูลทั้งหมด (CSV)
+        </button>
+      </div>
+      <div class="col-12 col-md-6">
+        <button type="button" class="btn btn-outline-warning text-dark w-100" onclick="exportAllJSON()">
+          <i class="fa fa-file-code me-2"></i>Export ข้อมูลทั้งหมด (JSON)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 mb-5 flex-wrap">
+    <button type="submit" class="btn btn-save px-4"><i class="fa fa-save me-2"></i>บันทึกข้อมูล</button>
+    <button type="button" class="btn btn-outline-secondary px-3" onclick="clearForm()">
+      <i class="fa fa-times me-1"></i>ล้างฟอร์ม
+    </button>
+  </div>
+</form>
+</div>
+
+<!-- ==================== TAB LIST ==================== -->
+<div id="tab-list" style="display:none">
+  <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+    <input type="text" class="form-control" id="search-input"
+      placeholder="🔍 ค้นหาชื่อ ตำแหน่ง หน่วยงาน ตำแหน่งเลขที่..."
+      style="max-width:340px" oninput="renderTable()">
+    <select class="form-select" id="filter-status" style="max-width:180px" onchange="renderTable()">
+      <option value="">ทุกสถานะ</option>
+      <option>ผ่าน</option><option>ไม่ผ่าน</option>
+      <option>รอผล</option><option>ขอแก้ไข</option>
+    </select>
+    <button class="btn btn-success" onclick="exportAllCSV()"><i class="fa fa-file-csv me-1"></i>Export CSV</button>
+    <button class="btn btn-warning text-dark" onclick="exportAllJSON()"><i class="fa fa-file-code me-1"></i>Export JSON</button>
+    <button class="btn btn-outline-danger" onclick="clearAll()"><i class="fa fa-trash me-1"></i>ลบทั้งหมด</button>
+    <span class="ms-auto text-muted small">แสดง <b id="rec-shown">0</b> / <b id="rec-total">0</b> รายการ</span>
+  </div>
+  <div class="table-responsive rounded shadow-sm">
+    <table class="table table-bordered table-hover table-sm mb-0" id="tbl">
+      <thead>
+        <tr>
+          <th>#</th><th>ตำแหน่งเลขที่</th><th>ชื่อ-นามสกุล</th>
+          <th>ตำแหน่งปัจจุบัน</th><th>ระดับ</th>
+          <th>กลุ่มงาน</th><th>สำนัก/กอง</th>
+          <th>คะแนนเฉลี่ย</th><th>ผลงาน</th>
+          <th>วันที่บันทึก</th><th>จัดการ</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ==================== TAB DASHBOARD ==================== -->
+<div id="tab-dashboard" style="display:none">
+  <div class="row g-3 mb-3" id="stat-cards"></div>
+  <div class="row g-3">
+    <div class="col-12 col-lg-5"><div class="cc"><canvas id="chart-result" height="240"></canvas></div></div>
+    <div class="col-12 col-lg-7"><div class="cc"><canvas id="chart-level" height="240"></canvas></div></div>
+    <div class="col-12 col-lg-6"><div class="cc"><canvas id="chart-sec" height="220"></canvas></div></div>
+    <div class="col-12 col-lg-6"><div class="cc"><canvas id="chart-score" height="220"></canvas></div></div>
+  </div>
+</div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast-container">
+  <div id="myToast" class="toast align-items-center text-white border-0" role="alert">
+    <div class="d-flex">
+      <div class="toast-body" id="toast-msg"></div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>

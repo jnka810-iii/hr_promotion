@@ -45,8 +45,7 @@ body{background:var(--bg);font-family:'Sarabun','Segoe UI',sans-serif;font-size:
 .upload-zone{background:linear-gradient(135deg,#f0f7ff,#e8f0fb);border:2px dashed #90b4e8;
              border-radius:10px;padding:20px;text-align:center;transition:.3s;cursor:pointer}
 .upload-zone:hover{border-color:#2a5298;background:#e3eeff}
-.upload-zone.has-file{border-style:solid;border-color:#198754;
-                      background:linear-gradient(135deg,#f0fff4,#e8f7ee)}
+.upload-zone.has-file{border-style:solid;border-color:#198754;background:linear-gradient(135deg,#f0fff4,#e8f7ee)}
 .upload-zone.uploading{border-color:#f59e0b;background:#fffbeb;cursor:wait}
 .file-panel{background:#fff;border:1px solid #dde3ef;border-radius:10px;
             padding:16px 18px;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
@@ -88,7 +87,6 @@ textarea.form-control{resize:vertical}
 </head>
 <body>
 
-<!-- HEADER -->
 <div class="hdr d-flex align-items-center justify-content-between flex-wrap gap-2">
   <div class="d-flex align-items-center gap-3">
     <i class="fa fa-landmark fa-2x" style="color:var(--ac)"></i>
@@ -100,7 +98,6 @@ textarea.form-control{resize:vertical}
   <span class="mbadge" id="mode-badge"><span class="dot dy"></span>กำลังเชื่อมต่อ...</span>
 </div>
 
-<!-- TAB NAV -->
 <div class="tnav">
   <button class="tbtn active" onclick="showTab('tab-form',this)"><i class="fa fa-edit me-1"></i>กรอกข้อมูล</button>
   <button class="tbtn" onclick="showTab('tab-list',this)"><i class="fa fa-list me-1"></i>รายการทั้งหมด <span class="badge bg-danger ms-1" id="badge-count">0</span></button>
@@ -109,12 +106,10 @@ textarea.form-control{resize:vertical}
 
 <div class="container-fluid px-3 px-md-4 py-3">
 
-<!-- ==================== TAB FORM ==================== -->
 <div id="tab-form">
 <form id="mainForm" novalidate>
   <input type="hidden" id="rec-id">
 
-  <!-- ส่วนที่ 1 -->
   <div class="sh"><i class="fa fa-user me-2"></i>ส่วนที่ 1 : ข้อมูลส่วนตัวของบุคคล</div>
   <div class="sb">
     <div class="row g-3">
@@ -150,7 +145,6 @@ textarea.form-control{resize:vertical}
     </div>
   </div>
 
-  <!-- ส่วนที่ 2 -->
   <div class="sh"><i class="fa fa-briefcase me-2"></i>ส่วนที่ 2 : ข้อมูลตำแหน่งและส่วนราชการ</div>
   <div class="sb">
     <div class="row g-3">
@@ -191,7 +185,6 @@ textarea.form-control{resize:vertical}
     </div>
   </div>
 
-  <!-- ส่วนที่ 3 -->
   <div class="sh"><i class="fa fa-scroll me-2"></i>ส่วนที่ 3 : ข้อมูลตำแหน่งและส่วนราชการที่ได้รับเลือกเพื่อประเมินผลงาน</div>
   <div class="sb">
     <div class="row g-3">
@@ -237,7 +230,6 @@ textarea.form-control{resize:vertical}
     </div>
   </div>
 
-  <!-- ส่วนที่ 4 -->
   <div class="sh"><i class="fa fa-trophy me-2"></i>ส่วนที่ 4 : ผลงานที่เสนอเพื่อประกอบการพิจารณา</div>
   <div class="sb">
     <div class="ssh"><i class="fa fa-file-alt me-1"></i>ผลงานที่ผ่านมา</div>
@@ -284,7 +276,6 @@ textarea.form-control{resize:vertical}
     </div>
   </div>
 
-  <!-- ส่วนที่ 5 -->
   <div class="sh"><i class="fa fa-star me-2"></i>ส่วนที่ 5 : ผลการประเมินผลงาน</div>
   <div class="sb">
     <div class="row g-3 mb-3">
@@ -325,7 +316,6 @@ textarea.form-control{resize:vertical}
     </div>
   </div>
 
-  <!-- ส่วนที่ 6 -->
   <div class="sh"><i class="fa fa-file-pdf me-2"></i>ส่วนที่ 6 : ไฟล์เล่มผลงานฉบับสมบูรณ์</div>
   <div class="sb">
     <div id="file-container"></div>
@@ -352,7 +342,6 @@ textarea.form-control{resize:vertical}
 </form>
 </div>
 
-<!-- ==================== TAB LIST ==================== -->
 <div id="tab-list" style="display:none">
   <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
     <input type="text" class="form-control" id="search-input"
@@ -384,7 +373,6 @@ textarea.form-control{resize:vertical}
   </div>
 </div>
 
-<!-- ==================== TAB DASHBOARD ==================== -->
 <div id="tab-dashboard" style="display:none">
   <div class="row g-3 mb-3" id="stat-cards"></div>
   <div class="row g-3">
@@ -397,7 +385,6 @@ textarea.form-control{resize:vertical}
 
 </div>
 
-<!-- Toast -->
 <div class="toast-container">
   <div id="myToast" class="toast align-items-center text-white border-0" role="alert">
     <div class="d-flex">
@@ -406,3 +393,641 @@ textarea.form-control{resize:vertical}
     </div>
   </div>
 </div>
+
+<template id="tmpl-eval51">
+  <div class="eval-row mb-2" data-type="eval51">
+    <div class="d-flex align-items-center mb-2">
+      <span class="eval-num">?</span>
+      <strong class="row-lbl" style="font-size:.85rem;color:var(--pr)">รอบที่ ?</strong>
+      <button type="button" class="btn btn-outline-danger btn-sm ms-auto py-0" onclick="delEvalRow(this)">
+        <i class="fa fa-trash"></i>
+      </button>
+    </div>
+    <div class="row g-2">
+      <div class="col-12 col-md-4">
+        <label class="form-label" style="font-size:.82rem">วันที่ประเมิน</label>
+        <input type="date" class="form-control form-control-sm" name="e51_date">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label" style="font-size:.82rem">คะแนน (%)</label>
+        <input type="number" class="form-control form-control-sm e51-score" name="e51_score"
+               min="0" max="100" step="0.01" placeholder="0.00">
+      </div>
+      <div class="col-12 col-md-5">
+        <label class="form-label" style="font-size:.82rem">ระดับผล</label>
+        <select class="form-select form-select-sm" name="e51_grade">
+          <option value="">-- เลือก --</option>
+          <option>ผ่าน (≥60%)</option>
+          <option>ไม่ผ่าน (&lt;60%)</option>
+          <option>ปรับปรุงในส่วนที่เป็นสาระสำคัญ</option>
+        </select>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="tmpl-eval52">
+  <div class="eval-row mb-2" data-type="eval52">
+    <div class="d-flex align-items-center mb-2">
+      <span class="eval-num">?</span>
+      <strong class="row-lbl" style="font-size:.85rem;color:var(--pr)">ครั้งที่ ?</strong>
+      <button type="button" class="btn btn-outline-danger btn-sm ms-auto py-0" onclick="delEvalRow(this)">
+        <i class="fa fa-trash"></i>
+      </button>
+    </div>
+    <div class="row g-2">
+      <div class="col-6 col-md-3">
+        <label class="form-label" style="font-size:.82rem">วันที่ประเมิน</label>
+        <input type="date" class="form-control form-control-sm" name="e52_date">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label" style="font-size:.82rem">ระดับคะแนน</label>
+        <select class="form-select form-select-sm" name="e52_grade">
+          <option value="">-- เลือก --</option>
+          <option>ดีเด่น</option><option>ดีมาก</option>
+          <option>ยอมรับได้</option><option>ปรับปรุง</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-6">
+        <label class="form-label" style="font-size:.82rem">รายละเอียดการพิจารณาและความเห็นของกรรมการ</label>
+        <textarea class="form-control form-control-sm" name="e52_remark" rows="2" placeholder="ความเห็นเพิ่มเติม"></textarea>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script>
+'use strict';
+const API_BASE = '/api/records';
+const LS_KEY   = 'hr_promo_v5';
+let USE_FLASK  = false;
+let allRecords = [];
+let charts     = {};
+const COLORS   = ['#1a3a6b','#c8a951','#198754','#dc3545','#0dcaf0','#6f42c1','#fd7e14','#20c997'];
+
+const SF = [
+  'p1_title','p1_fname','p1_lname','p1_edu','p1_edu_major',
+  'p2_pos_current','p2_pos_level','p2_empid','p2_dept','p2_sec','p2_org',
+  'p3_pos','p3_pos_level','p3_empid','p3_dept','p3_sec','p3_org','p3_announcement',
+  'p4_work1_title','p4_work1_year','p4_work2_title','p4_work2_year',
+  'p4_work3_title','p4_work3_year','p4_concept_title','p4_work_award',
+  'p5_doc_received','p5_work_result','p5_work_score','p5_work_eval_date',
+];
+
+const fileCache    = {};
+const uploadedMeta = {};
+let pendingReads   = 0;
+
+const LS = {
+  all(){ try{ return JSON.parse(localStorage.getItem(LS_KEY))||[]; }catch{ return []; } },
+  save(a){ localStorage.setItem(LS_KEY,JSON.stringify(a)); },
+  add(d){ const a=LS.all(); d._id=uid(); d._created=now(); d._updated=''; a.push(d); LS.save(a); return d; },
+  upd(id,d){ const a=LS.all(); const i=a.findIndex(r=>r._id===id);
+             if(i>-1){ d._id=id; d._created=a[i]._created; d._updated=now(); a[i]=d; } LS.save(a); },
+  del(id){ LS.save(LS.all().filter(r=>r._id!==id)); },
+  clear(){ localStorage.removeItem(LS_KEY); }
+};
+
+async function apiFetch(path, method='GET', body=null){
+  const opt = { method, headers:{'Content-Type':'application/json'} };
+  if(body) opt.body = JSON.stringify(body);
+  const r = await fetch(path, opt);
+  if(!r.ok){
+    let msg = `HTTP ${r.status}`;
+    try{ const j=await r.json(); if(j?.error) msg=j.error; }catch{}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+(async()=>{
+  const b = document.getElementById('mode-badge');
+  try{
+    await apiFetch(API_BASE);
+    USE_FLASK = true;
+    b.innerHTML = '<span class="dot dg"></span>Flask + SQLite ✓';
+  } catch {
+    b.innerHTML = '<span class="dot dg"></span>LocalStorage (Offline)';
+  }
+  await loadAll();
+})();
+
+async function dbGetAll(){ return USE_FLASK ? apiFetch(API_BASE) : LS.all(); }
+async function dbAdd(d){   return USE_FLASK ? apiFetch(API_BASE,'POST',d) : LS.add(d); }
+async function dbUpd(id,d){ USE_FLASK ? await apiFetch(`${API_BASE}/${id}`,'PUT',d) : LS.upd(id,d); }
+async function dbDel(id){   USE_FLASK ? await apiFetch(`${API_BASE}/${id}`,'DELETE') : LS.del(id); }
+async function dbClear(){   USE_FLASK ? await apiFetch(API_BASE,'DELETE') : LS.clear(); }
+async function loadAll(){ allRecords = await dbGetAll(); document.getElementById('badge-count').textContent = allRecords.length; }
+
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2); }
+function now(){ return new Date().toLocaleString('th-TH'); }
+function dStr(){ return new Date().toISOString().slice(0,10).replace(/-/g,''); }
+function fmtDate(s){ if(!s) return ''; const [y,m,d]=s.split('-'); return `${d}/${m}/${y}`; }
+
+function toast(msg, color='#198754'){
+  const el=document.getElementById('myToast');
+  el.style.background=color;
+  const msgEl=document.getElementById('toast-msg');
+  msgEl.textContent=msg; msgEl.title=msg;
+  console.error('[HR]',msg);
+  new bootstrap.Toast(el,{delay:6000}).show();
+}
+function toastError(err){
+  const msg=err?.message||String(err);
+  console.error('[HR Error]',msg);
+  toast(msg,'#dc3545');
+  if(msg.length>80) setTimeout(()=>alert('เกิดข้อผิดพลาด:\n\n'+msg),100);
+}
+function showTab(id,el){
+  ['tab-form','tab-list','tab-dashboard'].forEach(t=>document.getElementById(t).style.display='none');
+  document.getElementById(id).style.display='';
+  document.querySelectorAll('.tbtn').forEach(b=>b.classList.remove('active'));
+  if(el) el.classList.add('active');
+  if(id==='tab-list')      loadAll().then(renderTable);
+  if(id==='tab-dashboard') loadAll().then(renderDashboard);
+}
+
+function addEval51(vals=null){
+  const c=document.getElementById('eval51-container');
+  const clone=document.getElementById('tmpl-eval51').content.cloneNode(true);
+  const row=clone.querySelector('.eval-row');
+  const idx=c.querySelectorAll('.eval-row').length+1;
+  row.querySelector('.eval-num').textContent=idx;
+  row.querySelector('.row-lbl').textContent=`รอบที่ ${idx}`;
+  if(vals){ row.querySelector('[name="e51_date"]').value=vals.date||'';
+            row.querySelector('[name="e51_score"]').value=vals.score||'';
+            row.querySelector('[name="e51_grade"]').value=vals.grade||''; }
+  c.appendChild(row);
+}
+function addEval52(vals=null){
+  const c=document.getElementById('eval52-container');
+  const clone=document.getElementById('tmpl-eval52').content.cloneNode(true);
+  const row=clone.querySelector('.eval-row');
+  const idx=c.querySelectorAll('.eval-row').length+1;
+  row.querySelector('.eval-num').textContent=idx;
+  row.querySelector('.row-lbl').textContent=`ครั้งที่ ${idx}`;
+  if(vals){ row.querySelector('[name="e52_date"]').value=vals.date||'';
+            row.querySelector('[name="e52_grade"]').value=vals.grade||'';
+            row.querySelector('[name="e52_remark"]').value=vals.remark||''; }
+  c.appendChild(row);
+}
+function delEvalRow(btn){ const row=btn.closest('.eval-row'); const type=row.dataset.type; row.remove(); renumEval(type); }
+function renumEval(type){
+  const cid=type==='eval51'?'eval51-container':'eval52-container';
+  const lbl=type==='eval51'?'รอบที่':'ครั้งที่';
+  document.querySelectorAll(`#${cid} .eval-row`).forEach((r,i)=>{
+    r.querySelector('.eval-num').textContent=i+1;
+    r.querySelector('.row-lbl').textContent=`${lbl} ${i+1}`;
+  });
+}
+function getEval51Data(){
+  return Array.from(document.querySelectorAll('#eval51-container .eval-row')).map(r=>({
+    date:r.querySelector('[name="e51_date"]').value,
+    score:r.querySelector('[name="e51_score"]').value,
+    grade:r.querySelector('[name="e51_grade"]').value,
+  }));
+}
+function getEval52Data(){
+  return Array.from(document.querySelectorAll('#eval52-container .eval-row')).map(r=>({
+    date:r.querySelector('[name="e52_date"]').value,
+    grade:r.querySelector('[name="e52_grade"]').value,
+    remark:r.querySelector('[name="e52_remark"]').value,
+  }));
+}
+
+function buildFilePanels(){
+  const c=document.getElementById('file-container'); c.innerHTML='';
+  for(let n=1;n<=3;n++){
+    c.insertAdjacentHTML('beforeend',`
+      <div class="file-panel" id="file-panel-${n}">
+        <div class="d-flex align-items-center mb-3">
+          <span class="book-no">${n}</span>
+          <span class="fw-bold text-primary" style="font-size:.92rem">ไฟล์ผลงานฉบับสมบูรณ์ เล่มที่ ${n}</span>
+          <span id="upload-status-${n}" class="ms-3 badge bg-secondary" style="font-size:.72rem">ยังไม่มีไฟล์</span>
+        </div>
+        <div class="row g-3">
+          <div class="col-12 col-md-7">
+            <div class="upload-zone" id="uzone-${n}"
+                 onclick="document.getElementById('file-inp-${n}').click()"
+                 ondragover="event.preventDefault()" ondrop="handleDrop(event,${n})">
+              <i class="fa fa-cloud-upload-alt fa-2x text-primary mb-2 d-block"></i>
+              <div class="fw-bold text-primary" id="uzone-lbl-${n}">คลิกหรือลากไฟล์ PDF มาวางที่นี่</div>
+              <div class="text-muted mt-1" style="font-size:.8rem">รองรับ .pdf เท่านั้น (ขนาดไม่เกิน 100 MB)</div>
+              <input type="file" id="file-inp-${n}" style="display:none" accept=".pdf"
+                     onchange="handleFileSelect(this.files[0],${n})">
+            </div>
+            <div class="progress-wrap" id="prog-wrap-${n}">
+              <div class="progress-bar-inner" id="prog-bar-${n}" style="width:0%"></div>
+            </div>
+            <div id="file-info-${n}" class="mt-2" style="display:none">
+              <div class="d-flex align-items-center gap-2 p-2 bg-light rounded">
+                <i class="fa fa-file-pdf text-danger fa-lg"></i>
+                <div class="flex-grow-1 overflow-hidden">
+                  <div class="fw-bold text-truncate" id="fname-${n}" style="font-size:.85rem"></div>
+                  <div class="text-muted" id="fsize-${n}" style="font-size:.78rem"></div>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2"
+                        onclick="clearFile(${n})" title="ลบไฟล์"><i class="fa fa-times"></i></button>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-md-5 d-flex flex-column gap-2">
+            <button type="button" class="btn btn-danger" onclick="downloadFile(${n})">
+              <i class="fa fa-download me-2"></i>Download PDF เล่มที่ ${n}
+            </button>
+            <button type="button" class="btn btn-outline-primary" onclick="previewFile(${n})">
+              <i class="fa fa-eye me-2"></i>ดูตัวอย่าง PDF
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="printReport(${n})">
+              <i class="fa fa-print me-2"></i>พิมพ์รายงานสรุป
+            </button>
+          </div>
+        </div>
+      </div>`);
+  }
+}
+
+function setUploadStatus(n,text,cls='secondary'){
+  const el=document.getElementById('upload-status-'+n);
+  el.textContent=text; el.className=`ms-3 badge bg-${cls}`;
+}
+function showFileUI(n,name,size){
+  const zone=document.getElementById('uzone-'+n); zone.classList.add('has-file');
+  document.getElementById('uzone-lbl-'+n).textContent=name;
+  document.getElementById('fname-'+n).textContent=name;
+  document.getElementById('fsize-'+n).textContent=`${(size/1024).toFixed(1)} KB`;
+  document.getElementById('file-info-'+n).style.display='';
+}
+function showProgress(n,pct){
+  const wrap=document.getElementById('prog-wrap-'+n);
+  const bar=document.getElementById('prog-bar-'+n);
+  wrap.style.display=pct<100?'':'none'; bar.style.width=pct+'%';
+}
+
+function handleFileSelect(file,n){
+  if(!file) return;
+  if(!file.name.toLowerCase().endsWith('.pdf')) return toast('รองรับเฉพาะไฟล์ PDF เท่านั้น','#dc3545');
+  if(file.size>100*1024*1024) return toast('ไฟล์ใหญ่เกิน 100 MB','#dc3545');
+  _readAndCache(file,n);
+}
+function handleDrop(ev,n){ ev.preventDefault(); const file=ev.dataTransfer.files[0]; if(file) handleFileSelect(file,n); }
+
+function _readAndCache(file,n){
+  const reader=new FileReader();
+  const zone=document.getElementById('uzone-'+n);
+  zone.classList.add('uploading');
+  setUploadStatus(n,'กำลังอ่านไฟล์...','warning');
+  showProgress(n,30);
+  pendingReads++;
+
+  reader.onload=async(ev)=>{
+    pendingReads=Math.max(0,pendingReads-1);
+    const base64=ev.target.result;
+    fileCache[n]={name:file.name,base64,size:file.size};
+    showFileUI(n,file.name,file.size);
+    zone.classList.remove('uploading');
+    const rid=document.getElementById('rec-id').value;
+    if(rid&&USE_FLASK){ await _uploadToFlask(n,rid); }
+    else{ showProgress(n,100); setUploadStatus(n,'⏳ รอบันทึกข้อมูล','warning'); }
+  };
+  reader.onerror=()=>{
+    pendingReads=Math.max(0,pendingReads-1);
+    zone.classList.remove('uploading');
+    setUploadStatus(n,'อ่านไฟล์ล้มเหลว','danger');
+    showProgress(n,0);
+    toast(`อ่านไฟล์เล่มที่ ${n} ล้มเหลว กรุณาลองใหม่`,'#dc3545');
+  };
+  reader.readAsDataURL(file);
+}
+
+async function _uploadToFlask(n,rid){
+  const fd=fileCache[n]; if(!fd) return true;
+  setUploadStatus(n,'กำลังอัปโหลด...','warning'); showProgress(n,50);
+  try{
+    const res=await apiFetch(`/api/records/${rid}/attachments`,'POST',{book_no:n,filename:fd.name,data:fd.base64});
+    uploadedMeta[n]={att_id:res.id,filename:res.filename,size:res.size};
+    showProgress(n,100);
+    setUploadStatus(n,`✓ อัปโหลดแล้ว (${(res.size/1024).toFixed(1)} KB)`,'success');
+    return true;
+  }catch(err){
+    showProgress(n,0); setUploadStatus(n,'✗ อัปโหลดล้มเหลว','danger');
+    console.error(`[Upload เล่ม ${n}]`,err.message); return false;
+  }
+}
+
+async function clearFile(n){
+  if(USE_FLASK&&uploadedMeta[n]?.att_id){
+    try{ await apiFetch(`/api/attachments/${uploadedMeta[n].att_id}`,'DELETE'); }catch{}
+    delete uploadedMeta[n];
+  }
+  delete fileCache[n];
+  document.getElementById('file-inp-'+n).value='';
+  document.getElementById('file-info-'+n).style.display='none';
+  const zone=document.getElementById('uzone-'+n);
+  zone.classList.remove('has-file','uploading');
+  document.getElementById('uzone-lbl-'+n).textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
+  setUploadStatus(n,'ยังไม่มีไฟล์','secondary'); showProgress(n,100);
+  toast(`ลบไฟล์เล่มที่ ${n} เรียบร้อย`,'#6c757d');
+}
+
+async function downloadFile(n){
+  if(USE_FLASK&&uploadedMeta[n]?.att_id){ window.open(`/api/attachments/${uploadedMeta[n].att_id}`,'_blank'); return; }
+  if(fileCache[n]?.base64){ const a=document.createElement('a'); a.href=fileCache[n].base64; a.download=fileCache[n].name; a.click(); return; }
+  toast('ยังไม่มีไฟล์เล่มที่ '+n,'#dc3545');
+}
+async function previewFile(n){
+  if(USE_FLASK&&uploadedMeta[n]?.att_id){ window.open(`/api/attachments/${uploadedMeta[n].att_id}/preview`,'_blank'); return; }
+  if(fileCache[n]?.base64){ window.open(fileCache[n].base64,'_blank'); return; }
+  toast('ยังไม่มีไฟล์เล่มที่ '+n,'#dc3545');
+}
+
+async function loadAttachments(rid){
+  if(!USE_FLASK||!rid) return;
+  Object.keys(uploadedMeta).forEach(k=>delete uploadedMeta[k]);
+  try{
+    const list=await apiFetch(`/api/records/${rid}/attachments`);
+    list.forEach(att=>{
+      uploadedMeta[att.book_no]={att_id:att.id,filename:att.filename,size:att.file_size};
+      showFileUI(att.book_no,att.filename,att.file_size||0);
+      setUploadStatus(att.book_no,`✓ อัปโหลดแล้ว (${((att.file_size||0)/1024).toFixed(1)} KB)`,'success');
+    });
+  }catch(e){ console.warn('loadAttachments:',e.message); }
+}
+
+function printReport(bookNo){
+  const d=getForm();
+  const ev51=JSON.parse(d.eval51_rows||'[]');
+  const ev52=JSON.parse(d.eval52_rows||'[]');
+  const scores=ev51.map(r=>parseFloat(r.score)||0).filter(v=>v>0);
+  const avg=scores.length?(scores.reduce((a,b)=>a+b)/scores.length).toFixed(2):'-';
+  const win=window.open('','_blank');
+  win.document.write(`<!DOCTYPE html><html lang="th"><head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+<title>รายงานผลการประเมิน เล่มที่ ${bookNo}</title>
+<style>body{font-family:'Sarabun',sans-serif;font-size:13px;padding:28px;color:#222}
+h2{text-align:center;color:#1a3a6b;margin-bottom:4px}h3{color:#2a5298;border-bottom:2px solid #c8a951;padding-bottom:3px;margin:14px 0 8px}
+table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{border:1px solid #aaa;padding:5px 8px;font-size:12px}th{background:#1a3a6b;color:#fff}
+.row2{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px}.cell{flex:1;min-width:120px}.lbl{font-weight:700;color:#1a3a6b;font-size:11px;margin-bottom:2px}
+.val{border-bottom:1px solid #bbb;padding:2px 0;min-height:18px}@media print{button{display:none}}</style></head><body>
+<h2>รายงานผลการประเมินผลงาน เล่มที่ ${bookNo}</h2>
+<p style="text-align:center;color:#666">พิมพ์วันที่: ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</p>
+<h3>ส่วนที่ 1 : ข้อมูลส่วนตัว</h3>
+<div class="row2">
+  <div class="cell"><div class="lbl">ชื่อ-นามสกุล</div><div class="val">${d.p1_title||''}${d.p1_fname||''} ${d.p1_lname||''}</div></div>
+  <div class="cell"><div class="lbl">วุฒิการศึกษา</div><div class="val">${d.p1_edu||'-'}</div></div>
+  <div class="cell"><div class="lbl">สาขาวิชา</div><div class="val">${d.p1_edu_major||'-'}</div></div>
+</div>
+<h3>ส่วนที่ 2 : ตำแหน่งปัจจุบัน</h3>
+<div class="row2">
+  <div class="cell"><div class="lbl">ตำแหน่ง</div><div class="val">${d.p2_pos_current||'-'}</div></div>
+  <div class="cell"><div class="lbl">ระดับ</div><div class="val">${d.p2_pos_level||'-'}</div></div>
+  <div class="cell"><div class="lbl">เลขที่</div><div class="val">${d.p2_empid||'-'}</div></div>
+  <div class="cell"><div class="lbl">กลุ่มงาน</div><div class="val">${d.p2_dept||'-'}</div></div>
+  <div class="cell"><div class="lbl">สำนัก/กอง</div><div class="val">${d.p2_sec||'-'}</div></div>
+</div>
+<h3>ส่วนที่ 4 : ผลงานที่เสนอ</h3>
+<table><thead><tr><th>#</th><th>ชื่อผลงาน</th><th>ปี พ.ศ.</th></tr></thead><tbody>
+<tr><td>1</td><td>${d.p4_work1_title||'-'}</td><td>${d.p4_work1_year||'-'}</td></tr>
+<tr><td>2</td><td>${d.p4_work2_title||'-'}</td><td>${d.p4_work2_year||'-'}</td></tr>
+<tr><td>3</td><td>${d.p4_work3_title||'-'}</td><td>${d.p4_work3_year||'-'}</td></tr>
+</tbody></table>
+<p><strong>ข้อเสนอแนวคิด:</strong> ${d.p4_concept_title||'-'}</p>
+<h3>ส่วนที่ 5 : ผลการประเมิน</h3>
+<div class="row2">
+  <div class="cell"><div class="lbl">ผลการพิจารณา</div><div class="val">${d.p5_work_result||'-'}</div></div>
+  <div class="cell"><div class="lbl">คะแนนผลงาน</div><div class="val">${d.p5_work_score||'-'}</div></div>
+  <div class="cell"><div class="lbl">คะแนนเฉลี่ย 5.1</div><div class="val">${avg}%</div></div>
+</div>
+<h3>ส่วนที่ 5.1 : คะแนนรอบประเมินผลงาน</h3>
+<table><thead><tr><th>รอบที่</th><th>วันที่</th><th>คะแนน (%)</th><th>ระดับผล</th></tr></thead>
+<tbody>${ev51.map((r,i)=>`<tr><td>${i+1}</td><td>${fmtDate(r.date)||'-'}</td><td>${r.score||'-'}</td><td>${r.grade||'-'}</td></tr>`).join('')||'<tr><td colspan="4" style="text-align:center">-</td></tr>'}</tbody></table>
+<h3>ส่วนที่ 5.2 : คะแนนข้อเสนอแนวคิด</h3>
+<table><thead><tr><th>ครั้งที่</th><th>วันที่</th><th>ระดับ</th><th>ความเห็นกรรมการ</th></tr></thead>
+<tbody>${ev52.map((r,i)=>`<tr><td>${i+1}</td><td>${fmtDate(r.date)||'-'}</td><td>${r.grade||'-'}</td><td>${r.remark||'-'}</td></tr>`).join('')||'<tr><td colspan="4" style="text-align:center">-</td></tr>'}</tbody></table>
+<div style="text-align:center;margin-top:20px">
+  <button onclick="window.print()" style="padding:9px 28px;background:#1a3a6b;color:#fff;border:none;border-radius:7px;cursor:pointer;font-family:Sarabun,sans-serif;font-size:14px;font-weight:700">
+    🖨️ พิมพ์ / บันทึก PDF
+  </button>
+</div></body></html>`);
+  win.document.close();
+}
+
+function getForm(){
+  const d={};
+  SF.forEach(id=>{ d[id]=(document.getElementById(id)||{value:''}).value; });
+  d.eval51_rows=JSON.stringify(getEval51Data());
+  d.eval52_rows=JSON.stringify(getEval52Data());
+  return d;
+}
+function setForm(r){
+  SF.forEach(id=>{ const el=document.getElementById(id); if(el) el.value=r[id]||''; });
+  document.getElementById('eval51-container').innerHTML='';
+  document.getElementById('eval52-container').innerHTML='';
+  let ev51=[]; try{ ev51=JSON.parse(r.eval51_rows||'[]'); }catch{}
+  let ev52=[]; try{ ev52=JSON.parse(r.eval52_rows||'[]'); }catch{}
+  if(!ev51.length) addEval51(); else ev51.forEach(v=>addEval51(v));
+  if(!ev52.length) addEval52(); else ev52.forEach(v=>addEval52(v));
+}
+function clearForm(){
+  SF.forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('rec-id').value='';
+  document.getElementById('eval51-container').innerHTML='';
+  document.getElementById('eval52-container').innerHTML='';
+  addEval51(); addEval51(); addEval51();
+  addEval52(); addEval52(); addEval52();
+  for(let n=1;n<=3;n++){
+    delete fileCache[n]; delete uploadedMeta[n];
+    document.getElementById('file-inp-'+n).value='';
+    document.getElementById('file-info-'+n).style.display='none';
+    document.getElementById('uzone-'+n).classList.remove('has-file','uploading');
+    document.getElementById('uzone-lbl-'+n).textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
+    setUploadStatus(n,'ยังไม่มีไฟล์','secondary');
+  }
+}
+
+document.getElementById('mainForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const d=getForm();
+  if(pendingReads>0) return toast('⏳ กำลังโหลดไฟล์ PDF อยู่ กรุณารอสักครู่แล้วกดบันทึกอีกครั้ง','#f59e0b');
+  const missing=[];
+  if(!d.p1_title)         missing.push('คำนำหน้า');
+  if(!d.p1_fname)         missing.push('ชื่อ');
+  if(!d.p1_lname)         missing.push('นามสกุล');
+  if(!d.p2_pos_current)   missing.push('ตำแหน่งปัจจุบัน');
+  if(!d.p2_pos_level)     missing.push('ระดับตำแหน่งปัจจุบัน');
+  if(!d.p2_empid)         missing.push('ตำแหน่งเลขที่ (ส่วนที่ 2)');
+  if(!d.p2_dept)          missing.push('กลุ่มงาน (ส่วนที่ 2)');
+  if(!d.p2_sec)           missing.push('สำนัก/กอง/ศูนย์ (ส่วนที่ 2)');
+  if(!d.p3_pos)           missing.push('ตำแหน่งที่ได้รับเลือก');
+  if(!d.p3_pos_level)     missing.push('ระดับตำแหน่ง (ส่วนที่ 3)');
+  if(!d.p3_empid)         missing.push('ตำแหน่งเลขที่ (ส่วนที่ 3)');
+  if(!d.p4_work1_title)   missing.push('ผลงานที่ผ่านมาเรื่องที่ 1');
+  if(!d.p4_concept_title) missing.push('เรื่องที่เป็นข้อเสนอแนวคิด');
+  if(missing.length) return toast('กรุณากรอกข้อมูลที่จำเป็น (*): '+missing.join(', '),'#dc3545');
+
+  const rid=document.getElementById('rec-id').value;
+  let savedId;
+  try{
+    if(rid){ await dbUpd(rid,d); savedId=rid; }
+    else{ const res=await dbAdd(d); savedId=res?.id||res?._id||''; }
+
+    const uploadFails=[];
+    if(USE_FLASK&&savedId){
+      for(let n=1;n<=3;n++){
+        if(fileCache[n]?.base64&&!uploadedMeta[n]?.att_id){
+          const ok=await _uploadToFlask(n,savedId);
+          if(!ok) uploadFails.push(n);
+        }
+      }
+    }
+    clearForm(); await loadAll();
+    if(uploadFails.length){
+      const fl=uploadFails.join(', ');
+      setTimeout(()=>alert(`⚠️ บันทึกข้อมูลสำเร็จแล้ว\n\nแต่อัปโหลดไฟล์เล่มที่ ${fl} ไม่สำเร็จ\nกรุณาเปิดแก้ไขรายการนี้แล้วลองอัปโหลดไฟล์ใหม่`),200);
+      toast(`⚠️ บันทึกสำเร็จ แต่ไฟล์เล่ม ${fl} อัปโหลดไม่สำเร็จ`,'#f59e0b');
+    } else {
+      toast(rid?'อัปเดตข้อมูลเรียบร้อยแล้ว ✓':'บันทึกข้อมูลเรียบร้อยแล้ว ✓');
+    }
+  }catch(err){ toastError(err); }
+});
+
+function renderTable(){
+  const q=(document.getElementById('search-input').value||'').toLowerCase();
+  const st=document.getElementById('filter-status').value;
+  const f=allRecords.filter(r=>{
+    const m=!q||[r.p1_fname,r.p1_lname,r.p2_pos_current,r.p2_dept,r.p2_empid,r.p2_sec]
+                 .some(v=>(v||'').toLowerCase().includes(q));
+    return m&&(!st||r.p5_work_result===st);
+  });
+  document.getElementById('rec-shown').textContent=f.length;
+  document.getElementById('rec-total').textContent=allRecords.length;
+  const WC={ผ่าน:'success',ไม่ผ่าน:'danger',รอผล:'warning',ขอแก้ไข:'info'};
+  document.getElementById('tbody').innerHTML=f.map((r,i)=>{
+    const rid=r._id||r.id;
+    let avg='-';
+    try{ const ev=JSON.parse(r.eval51_rows||'[]').map(x=>parseFloat(x.score)||0).filter(v=>v>0);
+         if(ev.length) avg=(ev.reduce((a,b)=>a+b)/ev.length).toFixed(2)+'%'; }catch{}
+    return `<tr>
+      <td>${i+1}</td><td>${r.p2_empid||'-'}</td>
+      <td>${r.p1_title||''}${r.p1_fname||''} ${r.p1_lname||''}</td>
+      <td>${r.p2_pos_current||'-'}</td>
+      <td><span class="badge bg-secondary bsm">${r.p2_pos_level||'-'}</span></td>
+      <td>${r.p2_dept||'-'}</td><td>${r.p2_sec||'-'}</td>
+      <td class="text-center fw-bold">${avg}</td>
+      <td>${r.p5_work_result?`<span class="badge bg-${WC[r.p5_work_result]||'secondary'} bsm">${r.p5_work_result}</span>`:'-'}</td>
+      <td style="white-space:nowrap;font-size:.72rem">${r._created||r.created||''}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm btn-outline-primary me-1 py-0" onclick="editRec('${rid}')"><i class="fa fa-edit"></i></button>
+        <button class="btn btn-sm btn-outline-danger py-0" onclick="delRec('${rid}')"><i class="fa fa-trash"></i></button>
+      </td></tr>`;
+  }).join('');
+}
+
+async function editRec(id){
+  await loadAll();
+  const r=allRecords.find(x=>(x._id||x.id)==id);
+  if(!r) return;
+  document.querySelectorAll('.tbtn')[0].click();
+  setTimeout(async()=>{
+    setForm(r); document.getElementById('rec-id').value=id;
+    clearForm_filesOnly(); await loadAttachments(id);
+    window.scrollTo(0,0); toast('โหลดข้อมูลเพื่อแก้ไขแล้ว','#0d6efd');
+  },100);
+}
+function clearForm_filesOnly(){
+  for(let n=1;n<=3;n++){
+    delete fileCache[n]; delete uploadedMeta[n];
+    document.getElementById('file-inp-'+n).value='';
+    document.getElementById('file-info-'+n).style.display='none';
+    document.getElementById('uzone-'+n).classList.remove('has-file','uploading');
+    document.getElementById('uzone-lbl-'+n).textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
+    setUploadStatus(n,'ยังไม่มีไฟล์','secondary');
+  }
+}
+async function delRec(id){
+  if(!confirm('ต้องการลบรายการนี้?\n(ไฟล์แนบจะถูกลบด้วย)')) return;
+  await dbDel(id); toast('ลบรายการเรียบร้อย','#dc3545');
+  await loadAll(); renderTable();
+}
+async function clearAll(){
+  if(!confirm('ต้องการลบข้อมูลทั้งหมด?\n(ไม่สามารถย้อนกลับได้)')) return;
+  await dbClear(); toast('ลบข้อมูลทั้งหมดเรียบร้อย','#dc3545');
+  await loadAll(); renderTable();
+}
+
+function dl(c,n,t){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([c],{type:t})); a.download=n; a.click(); }
+function exportAllCSV(){
+  if(!allRecords.length) return toast('ไม่มีข้อมูล','#dc3545');
+  const flat=allRecords.map(r=>{
+    const b={...r};
+    ['eval51_rows','eval52_rows'].forEach(k=>{
+      try{ const arr=JSON.parse(r[k]||'[]'); arr.forEach((item,i)=>Object.entries(item).forEach(([fk,fv])=>{ b[`${k}_${i+1}_${fk}`]=fv; })); delete b[k]; }catch{}
+    }); return b;
+  });
+  const keys=[...new Set(flat.flatMap(r=>Object.keys(r)))];
+  const rows=flat.map(r=>keys.map(k=>`"${(r[k]||'').toString().replace(/"/g,'""')}"`).join(','));
+  dl('﻿'+[keys.join(','),...rows].join('\n'),`hr_promo_${dStr()}.csv`,'text/csv;charset=utf-8');
+  toast('Export CSV สำเร็จ ✓');
+}
+function exportAllJSON(){
+  if(!allRecords.length) return toast('ไม่มีข้อมูล','#dc3545');
+  dl(JSON.stringify(allRecords,null,2),`hr_promo_${dStr()}.json`,'application/json');
+  toast('Export JSON สำเร็จ ✓');
+}
+
+function kc(k){ if(charts[k]){charts[k].destroy();delete charts[k];} }
+function mkDoughnut(id,labels,data,title){
+  kc(id); charts[id]=new Chart(document.getElementById(id),{type:'doughnut',
+    data:{labels,datasets:[{data,backgroundColor:COLORS,borderWidth:2,hoverOffset:6}]},
+    options:{plugins:{title:{display:true,text:title,font:{size:13,family:'Sarabun'}},
+      legend:{position:'bottom',labels:{font:{family:'Sarabun'},padding:10}}},cutout:'55%'}});
+}
+function mkBar(id,labels,data,title,color='#1a3a6b'){
+  kc(id); charts[id]=new Chart(document.getElementById(id),{type:'bar',
+    data:{labels,datasets:[{label:title,data,backgroundColor:color,borderRadius:5}]},
+    options:{plugins:{title:{display:true,text:title,font:{size:13,family:'Sarabun'}},legend:{display:false}},
+      scales:{x:{ticks:{font:{family:'Sarabun'},maxRotation:40}},y:{ticks:{stepSize:1,font:{family:'Sarabun'}},beginAtZero:true}}}});
+}
+function renderDashboard(){
+  const total=allRecords.length;
+  const passed=allRecords.filter(r=>r.p5_work_result==='ผ่าน').length;
+  let sum=0,cnt=0; const wc={},lc={},sc={};
+  allRecords.forEach(r=>{
+    const w=r.p5_work_result||'ไม่ระบุ'; wc[w]=(wc[w]||0)+1;
+    const l=r.p2_pos_level||'ไม่ระบุ';  lc[l]=(lc[l]||0)+1;
+    const s=r.p2_sec||'ไม่ระบุ';         sc[s]=(sc[s]||0)+1;
+    try{ const ev=JSON.parse(r.eval51_rows||'[]').map(x=>parseFloat(x.score)||0).filter(v=>v>0);
+         if(ev.length){ sum+=ev.reduce((a,b)=>a+b)/ev.length; cnt++; } }catch{}
+  });
+  const avg=cnt?(sum/cnt).toFixed(2):'-';
+  document.getElementById('stat-cards').innerHTML=`
+    <div class="col-6 col-lg-3"><div class="sc"><div class="val text-primary">${total}</div><div class="lbl"><i class="fa fa-users me-1"></i>จำนวนรายการทั้งหมด</div></div></div>
+    <div class="col-6 col-lg-3"><div class="sc"><div class="val text-success">${passed}</div><div class="lbl"><i class="fa fa-check-circle me-1"></i>ผ่านการประเมิน</div></div></div>
+    <div class="col-6 col-lg-3"><div class="sc"><div class="val text-warning">${avg}${cnt?'%':''}</div><div class="lbl"><i class="fa fa-star me-1"></i>คะแนนเฉลี่ยรวม</div></div></div>
+    <div class="col-6 col-lg-3"><div class="sc"><div class="val text-info">${total?((passed/total)*100).toFixed(1)+'%':'-'}</div><div class="lbl"><i class="fa fa-percent me-1"></i>อัตราผ่าน</div></div></div>`;
+  mkDoughnut('chart-result',Object.keys(wc),Object.values(wc),'ผลการพิจารณาผลงาน');
+  mkBar('chart-level',Object.keys(lc),Object.values(lc),'จำนวนตามระดับตำแหน่ง','#2a5298');
+  mkBar('chart-sec',Object.keys(sc),Object.values(sc),'จำนวนตามสำนัก/กอง/ศูนย์','#c8a951');
+  kc('chart-score');
+  const names=allRecords.map(r=>`${r.p1_fname||''} ${r.p1_lname||''}`).slice(0,30);
+  const scores=allRecords.map(r=>{
+    try{ const ev=JSON.parse(r.eval51_rows||'[]').map(x=>parseFloat(x.score)||0).filter(v=>v>0);
+         return ev.length?(ev.reduce((a,b)=>a+b)/ev.length):null; }catch{ return null; }
+  }).slice(0,30);
+  charts['chart-score']=new Chart(document.getElementById('chart-score'),{type:'bar',
+    data:{labels:names,datasets:[
+      {label:'คะแนนเฉลี่ย (%)',data:scores,backgroundColor:scores.map(v=>v>=60?'rgba(25,135,84,.72)':'rgba(220,53,69,.72)'),borderRadius:4},
+      {label:'เกณฑ์ผ่าน (60%)',data:names.map(()=>60),type:'line',borderColor:'#c8a951',borderDash:[5,5],borderWidth:2,pointRadius:0,fill:false}
+    ]},
+    options:{plugins:{title:{display:true,text:'คะแนนเฉลี่ยรายบุคคล (🟢 ≥60% | 🔴 <60%)',font:{size:13,family:'Sarabun'}},
+      legend:{labels:{font:{family:'Sarabun'}}}},
+      scales:{x:{ticks:{font:{family:'Sarabun'},maxRotation:45}},y:{min:0,max:100,ticks:{font:{family:'Sarabun'}}}}}});
+}
+
+buildFilePanels();
+clearForm();
+</script>
+</body>
+</html>

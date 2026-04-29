@@ -227,6 +227,45 @@ textarea.form-control{resize:vertical}
         <textarea class="form-control" id="p3_announcement" rows="3"
           placeholder="ระบุหนังสือ/ประกาศการคัดเลือกเพื่อประเมินผลงานที่เกี่ยวข้อง"></textarea>
       </div>
+      <div class="col-12">
+        <label class="form-label"><i class="fa fa-file-pdf me-1 text-danger"></i>ไฟล์หนังสือประกาศ (PDF)</label>
+        <div class="row g-2 align-items-start">
+          <div class="col-12 col-md-7">
+            <div class="upload-zone" id="uzone-ann"
+                 onclick="document.getElementById('file-inp-ann').click()"
+                 ondragover="event.preventDefault()" ondrop="handleDropAnn(event)">
+              <i class="fa fa-cloud-upload-alt fa-lg text-primary mb-1 d-block"></i>
+              <div class="fw-bold text-primary" id="uzone-lbl-ann" style="font-size:.85rem">คลิกหรือลากไฟล์ PDF มาวางที่นี่</div>
+              <div class="text-muted" style="font-size:.75rem">รองรับ .pdf เท่านั้น (ขนาดไม่เกิน 100 MB)</div>
+              <input type="file" id="file-inp-ann" style="display:none" accept=".pdf"
+                     onchange="handleFileSelectAnn(this.files[0])">
+            </div>
+            <div class="progress-wrap" id="prog-wrap-ann">
+              <div class="progress-bar-inner" id="prog-bar-ann" style="width:0%"></div>
+            </div>
+            <div id="file-info-ann" class="mt-2" style="display:none">
+              <div class="d-flex align-items-center gap-2 p-2 bg-light rounded">
+                <i class="fa fa-file-pdf text-danger fa-lg"></i>
+                <div class="flex-grow-1 overflow-hidden">
+                  <div class="fw-bold text-truncate" id="fname-ann" style="font-size:.85rem"></div>
+                  <div class="text-muted" id="fsize-ann" style="font-size:.78rem"></div>
+                </div>
+                <span id="upload-status-ann" class="badge bg-secondary ms-1" style="font-size:.72rem">ยังไม่มีไฟล์</span>
+                <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2"
+                        onclick="clearFileAnn()" title="ลบไฟล์"><i class="fa fa-times"></i></button>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-md-5 d-flex flex-column gap-2">
+            <button type="button" class="btn btn-danger btn-sm" onclick="downloadFileAnn()">
+              <i class="fa fa-download me-2"></i>Download PDF ประกาศ
+            </button>
+            <button type="button" class="btn btn-outline-primary btn-sm" onclick="previewFileAnn()">
+              <i class="fa fa-eye me-2"></i>ดูตัวอย่าง PDF
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -742,6 +781,93 @@ async function previewFile(n){
   toast('ยังไม่มีไฟล์เล่มที่ '+n,'#dc3545');
 }
 
+function handleFileSelectAnn(file){
+  if(!file) return;
+  if(!file.name.toLowerCase().endsWith('.pdf')) return toast('รองรับเฉพาะไฟล์ PDF เท่านั้น','#dc3545');
+  if(file.size>100*1024*1024) return toast('ไฟล์ใหญ่เกิน 100 MB','#dc3545');
+  _readAndCacheAnn(file);
+}
+function handleDropAnn(ev){ ev.preventDefault(); const file=ev.dataTransfer.files[0]; if(file) handleFileSelectAnn(file); }
+
+function _readAndCacheAnn(file){
+  const reader=new FileReader();
+  const zone=document.getElementById('uzone-ann');
+  zone.classList.add('uploading');
+  setUploadStatusAnn('กำลังอ่านไฟล์...','warning');
+  showProgressAnn(30);
+  pendingReads++;
+  reader.onload=async(ev)=>{
+    pendingReads=Math.max(0,pendingReads-1);
+    fileCache['ann']={name:file.name,base64:ev.target.result,size:file.size};
+    showFileUIAnn(file.name,file.size);
+    zone.classList.remove('uploading');
+    const rid=document.getElementById('rec-id').value;
+    if(rid&&USE_FLASK){ await _uploadToFlaskAnn(rid); }
+    else{ showProgressAnn(100); setUploadStatusAnn('⏳ รอบันทึกข้อมูล','warning'); }
+  };
+  reader.onerror=()=>{
+    pendingReads=Math.max(0,pendingReads-1);
+    zone.classList.remove('uploading');
+    setUploadStatusAnn('อ่านไฟล์ล้มเหลว','danger');
+    showProgressAnn(0);
+    toast('อ่านไฟล์ประกาศล้มเหลว กรุณาลองใหม่','#dc3545');
+  };
+  reader.readAsDataURL(file);
+}
+function setUploadStatusAnn(text,cls='secondary'){
+  const el=document.getElementById('upload-status-ann');
+  if(el){ el.textContent=text; el.className=`badge bg-${cls} ms-1`; }
+}
+function showFileUIAnn(name,size){
+  document.getElementById('uzone-ann').classList.add('has-file');
+  document.getElementById('uzone-lbl-ann').textContent=name;
+  document.getElementById('fname-ann').textContent=name;
+  document.getElementById('fsize-ann').textContent=`${(size/1024).toFixed(1)} KB`;
+  document.getElementById('file-info-ann').style.display='';
+}
+function showProgressAnn(pct){
+  const wrap=document.getElementById('prog-wrap-ann');
+  const bar=document.getElementById('prog-bar-ann');
+  wrap.style.display=pct<100?'':'none'; bar.style.width=pct+'%';
+}
+async function _uploadToFlaskAnn(rid){
+  const fd=fileCache['ann']; if(!fd) return true;
+  setUploadStatusAnn('กำลังอัปโหลด...','warning'); showProgressAnn(50);
+  try{
+    const res=await apiFetch(`/api/records/${rid}/attachments`,'POST',{book_no:'ann',filename:fd.name,data:fd.base64});
+    uploadedMeta['ann']={att_id:res.id,filename:res.filename,size:res.size};
+    showProgressAnn(100);
+    setUploadStatusAnn(`✓ อัปโหลดแล้ว (${(res.size/1024).toFixed(1)} KB)`,'success');
+    return true;
+  }catch(err){
+    showProgressAnn(0); setUploadStatusAnn('✗ อัปโหลดล้มเหลว','danger');
+    console.error('[Upload ประกาศ]',err.message); return false;
+  }
+}
+async function clearFileAnn(){
+  if(USE_FLASK&&uploadedMeta['ann']?.att_id){
+    try{ await apiFetch(`/api/attachments/${uploadedMeta['ann'].att_id}`,'DELETE'); }catch{}
+    delete uploadedMeta['ann'];
+  }
+  delete fileCache['ann'];
+  document.getElementById('file-inp-ann').value='';
+  document.getElementById('file-info-ann').style.display='none';
+  document.getElementById('uzone-ann').classList.remove('has-file','uploading');
+  document.getElementById('uzone-lbl-ann').textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
+  setUploadStatusAnn('ยังไม่มีไฟล์','secondary'); showProgressAnn(100);
+  toast('ลบไฟล์ประกาศเรียบร้อย','#6c757d');
+}
+async function downloadFileAnn(){
+  if(USE_FLASK&&uploadedMeta['ann']?.att_id){ window.open(`/api/attachments/${uploadedMeta['ann'].att_id}`,'_blank'); return; }
+  if(fileCache['ann']?.base64){ const a=document.createElement('a'); a.href=fileCache['ann'].base64; a.download=fileCache['ann'].name; a.click(); return; }
+  toast('ยังไม่มีไฟล์ประกาศ','#dc3545');
+}
+async function previewFileAnn(){
+  if(USE_FLASK&&uploadedMeta['ann']?.att_id){ window.open(`/api/attachments/${uploadedMeta['ann'].att_id}/preview`,'_blank'); return; }
+  if(fileCache['ann']?.base64){ window.open(fileCache['ann'].base64,'_blank'); return; }
+  toast('ยังไม่มีไฟล์ประกาศ','#dc3545');
+}
+
 async function loadAttachments(rid){
   if(!USE_FLASK||!rid) return;
   Object.keys(uploadedMeta).forEach(k=>delete uploadedMeta[k]);
@@ -749,8 +875,13 @@ async function loadAttachments(rid){
     const list=await apiFetch(`/api/records/${rid}/attachments`);
     list.forEach(att=>{
       uploadedMeta[att.book_no]={att_id:att.id,filename:att.filename,size:att.file_size};
-      showFileUI(att.book_no,att.filename,att.file_size||0);
-      setUploadStatus(att.book_no,`✓ อัปโหลดแล้ว (${((att.file_size||0)/1024).toFixed(1)} KB)`,'success');
+      if(att.book_no==='ann'){
+        showFileUIAnn(att.filename,att.file_size||0);
+        setUploadStatusAnn(`✓ อัปโหลดแล้ว (${((att.file_size||0)/1024).toFixed(1)} KB)`,'success');
+      } else {
+        showFileUI(att.book_no,att.filename,att.file_size||0);
+        setUploadStatus(att.book_no,`✓ อัปโหลดแล้ว (${((att.file_size||0)/1024).toFixed(1)} KB)`,'success');
+      }
     });
   }catch(e){ console.warn('loadAttachments:',e.message); }
 }
@@ -845,6 +976,12 @@ function clearForm(){
     document.getElementById('uzone-lbl-'+n).textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
     setUploadStatus(n,'ยังไม่มีไฟล์','secondary');
   }
+  delete fileCache['ann']; delete uploadedMeta['ann'];
+  document.getElementById('file-inp-ann').value='';
+  document.getElementById('file-info-ann').style.display='none';
+  document.getElementById('uzone-ann').classList.remove('has-file','uploading');
+  document.getElementById('uzone-lbl-ann').textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
+  setUploadStatusAnn('ยังไม่มีไฟล์','secondary');
 }
 
 document.getElementById('mainForm').addEventListener('submit',async e=>{
@@ -880,6 +1017,10 @@ document.getElementById('mainForm').addEventListener('submit',async e=>{
           const ok=await _uploadToFlask(n,savedId);
           if(!ok) uploadFails.push(n);
         }
+      }
+      if(fileCache['ann']?.base64&&!uploadedMeta['ann']?.att_id){
+        const ok=await _uploadToFlaskAnn(savedId);
+        if(!ok) uploadFails.push('ประกาศ');
       }
     }
     clearForm(); await loadAll();
@@ -945,6 +1086,12 @@ function clearForm_filesOnly(){
     document.getElementById('uzone-lbl-'+n).textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
     setUploadStatus(n,'ยังไม่มีไฟล์','secondary');
   }
+  delete fileCache['ann']; delete uploadedMeta['ann'];
+  document.getElementById('file-inp-ann').value='';
+  document.getElementById('file-info-ann').style.display='none';
+  document.getElementById('uzone-ann').classList.remove('has-file','uploading');
+  document.getElementById('uzone-lbl-ann').textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
+  setUploadStatusAnn('ยังไม่มีไฟล์','secondary');
 }
 async function delRec(id){
   if(!confirm('ต้องการลบรายการนี้?\n(ไฟล์แนบจะถูกลบด้วย)')) return;

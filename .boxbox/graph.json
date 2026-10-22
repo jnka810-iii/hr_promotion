@@ -1,0 +1,235 @@
+{
+  "project_name": "hr_promotion",
+  "stack": [
+    { "name": "Python", "category": "backend", "icon": "python" },
+    { "name": "Flask", "category": "backend", "icon": "python" },
+    { "name": "SQLite", "category": "database", "icon": "sqlite" },
+    { "name": "pywebview", "category": "frontend", "icon": "box" },
+    { "name": "Bootstrap 5", "category": "frontend", "icon": "box" },
+    { "name": "Chart.js", "category": "frontend", "icon": "chart" },
+    { "name": "Jinja2", "category": "frontend", "icon": "box" }
+  ],
+  "nodes": [
+    {
+      "id": "personnel_form",
+      "name": "Personnel Data Entry",
+      "plain_english": "HR staff fill in a multi-page form with the employee's personal info, current role, and the position they are being considered for.",
+      "layer": "frontend",
+      "rank": 0,
+      "icon": "file",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "work_evaluation",
+      "name": "Work Evaluation & Scoring",
+      "plain_english": "Captures past achievements, evaluation scores, and structured evaluation grid rows for each promotion candidate.",
+      "layer": "frontend",
+      "rank": 0,
+      "icon": "chart",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "dashboard",
+      "name": "Summary Dashboard",
+      "plain_english": "Shows charts with total candidates, pass/fail counts, and breakdowns by position level.",
+      "layer": "frontend",
+      "rank": 0,
+      "icon": "dashboard",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "records_list",
+      "name": "Records List & Search",
+      "plain_english": "A searchable table where HR staff browse, filter, edit, or delete promotion records.",
+      "layer": "frontend",
+      "rank": 0,
+      "icon": "globe",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "records_api",
+      "name": "Records CRUD API",
+      "plain_english": "Server-side endpoints that create, read, update, and delete promotion records after validating required Thai fields.",
+      "layer": "api",
+      "rank": 1,
+      "icon": "settings",
+      "files": ["app.py"],
+      "external": false
+    },
+    {
+      "id": "attachments",
+      "name": "PDF Attachment API",
+      "plain_english": "Handles uploading, storing, previewing, and downloading PDF documents linked to each promotion record.",
+      "layer": "api",
+      "rank": 1,
+      "icon": "file",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "export",
+      "name": "CSV Export API",
+      "plain_english": "Streams all promotion records as a CSV file so HR staff can open them in Excel.",
+      "layer": "api",
+      "rank": 1,
+      "icon": "file",
+      "files": ["app.py"],
+      "external": false
+    },
+    {
+      "id": "infrastructure",
+      "name": "Desktop Launcher",
+      "plain_english": "Starts Flask in a background thread and opens the app as a native Windows desktop window using pywebview.",
+      "layer": "backend",
+      "rank": 2,
+      "icon": "settings",
+      "files": ["app.py", ".gitignore"],
+      "external": false
+    },
+    {
+      "id": "database",
+      "name": "Database & Migrations",
+      "plain_english": "SQLite database storing all promotion records and attachment metadata, with automatic schema migration for legacy columns.",
+      "layer": "database",
+      "rank": 3,
+      "icon": "sqlite",
+      "files": ["hr_promotion.db", "app.py", "check_db.py", "fix_db.py"],
+      "external": false
+    },
+    {
+      "id": "google_fonts",
+      "name": "Google Fonts",
+      "plain_english": "Loads the Sarabun Thai-language typeface for the UI.",
+      "layer": "external",
+      "rank": 1,
+      "icon": "globe",
+      "files": [],
+      "external": true
+    },
+    {
+      "id": "bootstrap_cdn",
+      "name": "Bootstrap CDN",
+      "plain_english": "Delivers Bootstrap 5 CSS for responsive layout and UI components.",
+      "layer": "external",
+      "rank": 1,
+      "icon": "box",
+      "files": [],
+      "external": true
+    },
+    {
+      "id": "fontawesome_cdn",
+      "name": "Font Awesome CDN",
+      "plain_english": "Delivers icon glyphs used throughout the interface.",
+      "layer": "external",
+      "rank": 1,
+      "icon": "box",
+      "files": [],
+      "external": true
+    },
+    {
+      "id": "chartjs_cdn",
+      "name": "Chart.js CDN",
+      "plain_english": "Renders bar and summary charts on the dashboard tab.",
+      "layer": "external",
+      "rank": 1,
+      "icon": "chart",
+      "files": [],
+      "external": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "personnel_form",
+      "to": "records_api",
+      "label": "submits employee personal details and position data",
+      "kind": "api_call"
+    },
+    {
+      "from": "work_evaluation",
+      "to": "records_api",
+      "label": "submits evaluation scores and grid rows",
+      "kind": "api_call"
+    },
+    {
+      "from": "personnel_form",
+      "to": "attachments",
+      "label": "uploads announcement PDF and full work portfolio PDFs",
+      "kind": "api_call"
+    },
+    {
+      "from": "records_list",
+      "to": "records_api",
+      "label": "fetches all records for display, triggers edit and delete",
+      "kind": "api_call"
+    },
+    {
+      "from": "records_list",
+      "to": "export",
+      "label": "requests CSV download of all records",
+      "kind": "api_call"
+    },
+    {
+      "from": "dashboard",
+      "to": "records_api",
+      "label": "fetches statistics grouped by result and position level",
+      "kind": "api_call"
+    },
+    {
+      "from": "records_api",
+      "to": "database",
+      "label": "reads and writes promotion records",
+      "kind": "db_write"
+    },
+    {
+      "from": "attachments",
+      "to": "database",
+      "label": "reads and writes attachment metadata linked to records",
+      "kind": "db_write"
+    },
+    {
+      "from": "export",
+      "to": "database",
+      "label": "reads all records to build the CSV file",
+      "kind": "db_read"
+    },
+    {
+      "from": "infrastructure",
+      "to": "database",
+      "label": "initialises tables and runs schema migrations on startup",
+      "kind": "db_write"
+    },
+    {
+      "from": "personnel_form",
+      "to": "google_fonts",
+      "label": "downloads Sarabun Thai font for the UI",
+      "kind": "external_call"
+    },
+    {
+      "from": "personnel_form",
+      "to": "bootstrap_cdn",
+      "label": "loads Bootstrap CSS and JS bundle",
+      "kind": "external_call"
+    },
+    {
+      "from": "personnel_form",
+      "to": "fontawesome_cdn",
+      "label": "loads Font Awesome icon stylesheet",
+      "kind": "external_call"
+    },
+    {
+      "from": "dashboard",
+      "to": "chartjs_cdn",
+      "label": "loads Chart.js library to render bar charts",
+      "kind": "external_call"
+    }
+  ],
+  "summary": {
+    "feature_count": 13,
+    "connection_count": 14,
+    "headline": "A Thai government HR tool where staff record employee promotion evaluations, attach PDF documents, and view pass/fail statistics on a dashboard."
+  }
+}

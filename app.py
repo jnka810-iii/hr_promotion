@@ -6,11 +6,13 @@ Flask + SQLite3 + pywebview  →  Desktop App (.exe)
 DB เก็บเฉพาะ stored_name (UUID filename) และ filename (ชื่อต้นฉบับ)
 """
 
-import os, sys, sqlite3, threading, time, base64, json, uuid
+import os, re, sys, sqlite3, threading, time, base64, json, uuid, shutil
+from contextlib import closing
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, send_file
-from werkzeug.utils import secure_filename
 
+# pywebview เป็น optional dependency: มี = เปิดเป็นหน้าต่าง desktop,
+# ไม่มี = fallback รันเป็น web server ธรรมดา (ดู main())
 try:
     import webview
     HAS_WEBVIEW = True
@@ -18,10 +20,29 @@ except ImportError:
     HAS_WEBVIEW = False
 
 app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False
-# frontend ยังส่ง base64 อยู่ → ต้องรองรับ payload ≈ ขนาดไฟล์ × 1.33
-app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024
+# ปิดการ escape non-ASCII ใน jsonify — ให้ JSON ตอบกลับเป็นภาษาไทยอ่านออกตรง ๆ
+# (ค่า default ของ Flask จะแปลงไทยเป็น \uXXXX ทั้งหมด ซึ่งทำให้อักษรไทย 1 ตัว
+# โตจาก 3 ไบต์เป็น 6 ไบต์ และ response ดิบอ่านด้วยตาไม่ได้เลย)
+#
+# ต้องเซ็ตที่ app.json ไม่ใช่ app.config['JSON_AS_ASCII'] — Flask ย้ายกลไก JSON
+# ไปที่ json provider ตั้งแต่ 2.3 แล้ว config key เดิมถูกเพิกเฉยแบบเงียบ ๆ ไม่ error ให้รู้ตัว
+# (โปรเจกต์นี้ pin flask==3.1.3 จึงอยู่เลยจุดนั้นมานานแล้ว — ดู requirements.txt)
+app.json.ensure_ascii = False
+# frontend ส่งเป็น multipart แล้ว payload จึงเท่าขนาดไฟล์บวก overhead ไม่กี่ร้อยไบต์
+# ตั้งเพดาน 110 MB = ขีดจำกัดจริงที่ต้องการ 100 MB บวก headroom
+# หมายเหตุ: route อัปโหลดยังรับ base64-in-JSON ไว้สำหรับเครื่องมืออื่น (เช่น curl)
+# ซึ่งเส้นทางนั้น payload บวม ~33% จึงอัปไฟล์ได้จริงประมาณ 82 MB เท่านั้น
+app.config['MAX_CONTENT_LENGTH'] = 110 * 1024 * 1024
+# เพดานขนาดไฟล์ PDF ที่ยอมรับจริง ต้องตรงกับที่ UI บอกผู้ใช้ (100 MB ใน templates/index.html)
+# MAX_CONTENT_LENGTH ข้างบนกันแค่ขนาด request ทั้งก้อน ซึ่งเป็นเพดานคนละตัวและสูงกว่านี้
+# (110 MB เผื่อ overhead ของ multipart) การตรวจฝั่ง client ยกเลิกได้ด้วยการยิง API ตรง
+# จึงต้องมีสำเนาฝั่ง server เสมอ
+MAX_PDF_SIZE = 100 * 1024 * 1024
 
+# BASE_DIR ต้องชี้ถูกทั้ง 2 โหมด:
+# - รันปกติ (python app.py)     → โฟลเดอร์ของไฟล์ .py นี้
+# - แพ็กเป็น .exe (PyInstaller) → โฟลเดอร์ของตัว .exe (sys.frozen ถูกเซ็ตโดย PyInstaller)
+#   เพื่อให้ DB และไฟล์อัปโหลดอยู่ข้างตัวโปรแกรมเสมอ ไม่หลงไปอยู่ใน temp ที่ PyInstaller แตกไฟล์
 BASE_DIR      = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
 DB_PATH       = os.path.join(BASE_DIR, 'hr_promotion.db')
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
@@ -32,6 +53,21 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
 # ────────────────────────────────────────────────
 
 def get_db():
+    """
+    เปิด SQLite connection ใหม่ 1 ตัวต่อการเรียก 1 ครั้ง (fresh connection per request)
+
+    แนวคิด:
+    - ไม่ใช้ connection pool / global connection เพราะ SQLite ผูก connection กับ thread
+      ที่สร้างมัน — Flask อาจ serve แต่ละ request คนละ thread การเปิดใหม่ทุกครั้งจึงปลอดภัยสุด
+    - journal_mode=WAL (Write-Ahead Logging): ให้อ่านพร้อมกับเขียนได้โดยไม่ block กัน
+      เหมาะกับ desktop app ที่ UI ยิงหลาย request พร้อมกัน (เช่น โหลดตาราง + อัปโหลดไฟล์)
+    - foreign_keys=ON: SQLite ปิด FK enforcement เป็นค่า default ต้องเปิดเองทุก connection
+      เพื่อให้ ON DELETE CASCADE ของตาราง attachments ทำงานจริง
+    - row_factory=sqlite3.Row: ทำให้เข้าถึงคอลัมน์ด้วยชื่อได้ (row['id']) และแปลงเป็น dict ง่าย
+
+    Returns:
+        sqlite3.Connection: connection ที่พร้อมใช้งาน (ผู้เรียกต้องรับผิดชอบ .close() เอง)
+    """
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
@@ -39,23 +75,87 @@ def get_db():
     return con
 
 def now_str():
+    """
+    คืนวันเวลาปัจจุบันเป็น string รูปแบบไทยที่อ่านง่าย
+
+    Returns:
+        str: วันเวลาในรูปแบบ 'dd/mm/YYYY HH:MM' เช่น '11/07/2026 14:30'
+             (เก็บลงคอลัมน์ created/updated ตรง ๆ — DB นี้ไม่ใช้ datetime type)
+    """
     return datetime.now().strftime('%d/%m/%Y %H:%M')
 
 def dstr():
+    """
+    คืนวันที่ปัจจุบันแบบกระชับสำหรับใช้ตั้งชื่อไฟล์ export
+
+    Returns:
+        str: วันที่รูปแบบ 'YYYYMMDD' เช่น '20260711' (เรียงตามตัวอักษร = เรียงตามเวลา)
+    """
     return datetime.now().strftime('%Y%m%d')
 
 def row_to_dict(row):
+    """
+    แปลง sqlite3.Row → dict เพื่อให้ jsonify serialize ได้
+
+    Parameters:
+        row (sqlite3.Row): แถวผลลัพธ์จาก query (ต้องเปิด row_factory=sqlite3.Row ไว้แล้ว)
+
+    Returns:
+        dict: mapping ชื่อคอลัมน์ → ค่า
+    """
     return dict(row)
 
 def _safe_remove(path: str):
-    """ลบไฟล์โดยไม่ raise exception ถ้าไม่พบ"""
+    """
+    ลบไฟล์บนดิสก์แบบ "best-effort" — ไม่ raise exception ไม่ว่ากรณีใด
+
+    เหตุผล: ใช้ตอนลบไฟล์แนบ/rollback ซึ่งถ้าไฟล์หายไปก่อนแล้ว (ถูกลบมือ, ดิสก์มีปัญหา)
+    เราไม่อยากให้ transaction ฝั่ง DB ล้มตามไปด้วย — ข้อมูลใน DB สำคัญกว่าไฟล์กำพร้า
+
+    Parameters:
+        path (str): path เต็มของไฟล์ที่จะลบ (ยอมรับค่าว่าง/None ได้ จะข้ามไปเฉย ๆ)
+
+    Returns:
+        None
+    """
     try:
         if path and os.path.isfile(path):
             os.remove(path)
     except Exception:
         pass
 
+def sanitize_display_name(name: str, fallback: str) -> str:
+    """
+    ล้างชื่อไฟล์ที่ผู้ใช้ตั้ง ให้เหลือเฉพาะส่วนที่ปลอดภัยพอจะเก็บลง DB และส่งเป็น download_name
+
+    เหตุผลที่ไม่ใช้ secure_filename() ของ Werkzeug: มันตัดอักขระ non-ASCII ทิ้งทั้งหมด
+    ชื่อไทยจึงพังหมด ('ผลงานเล่มที่1.pdf' เหลือ '1.pdf', 'ประกาศ.pdf' เหลือ 'pdf'
+    ซึ่งไม่มีนามสกุลให้ Windows รู้จักด้วยซ้ำ) และเอกสารราชการไทยตั้งชื่อไฟล์เป็นไทยแทบทั้งหมด
+
+    ที่สำคัญคือชื่อนี้ไม่เคยถูกใช้ประกอบ path บนดิสก์ — ไฟล์จริงใช้ UUID (stored_name)
+    จึงไม่มีความเสี่ยง path traversal ให้ต้องป้องกันตั้งแต่ต้น ตัดทิ้งแค่ตัวคั่น path
+    กับอักขระควบคุมก็พอ ส่วน Flask จะ encode ชื่อ non-ASCII ตาม RFC 5987 ให้เองตอนส่ง header
+
+    Parameters:
+        name (str):     ชื่อไฟล์ต้นฉบับจาก client (รับค่าว่าง/None ได้)
+        fallback (str): ชื่อที่ใช้แทนเมื่อล้างแล้วไม่เหลืออะไร
+
+    Returns:
+        str: ชื่อที่ปลอดภัย ยาวไม่เกิน 255 ตัวอักษร (กัน row ใน DB และ header บวมผิดปกติ)
+    """
+    cleaned = re.sub(r'[\\/\x00-\x1f\x7f]', '', name or '').strip()
+    return cleaned[:255] or fallback
+
 def _stored_path(stored_name: str) -> str:
+    """
+    ประกอบ path เต็มของไฟล์แนบใน UPLOAD_FOLDER จากชื่อไฟล์ที่เก็บใน DB
+
+    Parameters:
+        stored_name (str): ชื่อไฟล์บนดิสก์ (UUID hex + '.pdf' — ไม่ใช่ชื่อไฟล์ต้นฉบับ)
+
+    Returns:
+        str: absolute path เช่น '<BASE_DIR>/static/uploads/ab12...cd.pdf'
+    """
     return os.path.join(UPLOAD_FOLDER, stored_name)
 
 
@@ -65,28 +165,86 @@ def _stored_path(stored_name: str) -> str:
 
 def _migrate_blobs_to_files(con):
     """
-    ย้ายไฟล์ที่เคยเก็บเป็น BLOB ใน DB → ไฟล์จริงบน UPLOAD_FOLDER
-    แล้วสร้างตาราง attachments ใหม่โดยไม่มีคอลัมน์ file_data
-    รองรับ schema เก่าที่อาจไม่มี mime_type / uploaded_at
+    Migration ครั้งเดียว: ย้ายไฟล์ PDF ที่เคยเก็บเป็น BLOB ในตาราง attachments
+    → เขียนเป็นไฟล์จริงบน UPLOAD_FOLDER แล้วสร้างตารางใหม่ที่ไม่มีคอลัมน์ file_data
+
+    เหตุผลที่ย้ายออกจาก BLOB:
+    - BLOB ขนาดใหญ่ทำให้ไฟล์ .db บวมและ query ช้า (SQLite อ่านทั้ง row)
+    - เก็บเป็นไฟล์แล้ว serve ผ่าน send_file() ได้โดยตรง ประหยัดหน่วยความจำ
+
+    อัลกอริทึม (ทำครบทุกแถวหรือไม่ทำเลย — ไม่มีสถานะกลาง):
+    0. สำเนาไฟล์ .db ไว้เป็น <db>.pre-migration.bak ก่อนแตะอะไรทั้งสิ้น
+    1. ตรวจ schema เก่าด้วย PRAGMA table_info แล้วเติมคอลัมน์ stored_name ถ้ายังไม่มี
+    2. loop ทุกแถว: dump BLOB → ไฟล์ UUID.pdf แล้วบันทึกชื่อไฟล์กลับลง stored_name
+       ถ้าเขียนไฟล์แถวใดพลาด → rollback, ลบไฟล์ที่เขียนไปแล้ว, raise ทันที
+       เหตุผลอยู่ที่ขั้นตอน 5 ซึ่งลบคอลัมน์ file_data ทิ้ง ถ้าปล่อยให้แถวที่พลาดผ่านไป
+       BLOB ของแถวนั้นจะหายถาวรโดยไม่มีสัญญาณเตือนใด ๆ
+    3. DROP ตารางชั่วคราว attachments_v2 ที่อาจค้างจาก migration ที่ล้มเหลวรอบก่อน
+    4. สร้าง attachments_v2 (schema ใหม่ ไม่มี file_data) แล้ว copy ข้อมูลข้ามด้วย
+       INSERT..SELECT — ใช้ src_map สร้าง expression รายคอลัมน์ เพราะ schema เก่า
+       บางเครื่องไม่มี mime_type/uploaded_at ต้อง fallback เป็นค่าคงที่/NULL
+    5. สลับตาราง: DROP ตัวเก่า → RENAME v2 เป็น attachments
+
+    เหตุผลที่ต้องสร้างตารางใหม่แทน ALTER: SQLite ไม่รองรับ DROP COLUMN
+    (ในเวอร์ชันเก่า) — การ rebuild ตารางคือวิธีมาตรฐานของ SQLite
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่ (ฟังก์ชันนี้ commit เอง แต่ไม่ close)
+
+    Raises:
+        RuntimeError: สำรองไฟล์ DB ไม่ได้ หรือเขียนไฟล์แนบไม่ครบทุกแถว
+                      ทั้งสองกรณี DB เดิมยังอยู่ครบ ผู้ใช้แก้สาเหตุแล้วเปิดแอปใหม่ได้
+
+    Returns:
+        None (side effect: โครงสร้างตาราง attachments เปลี่ยน + ไฟล์ถูกเขียนลงดิสก์)
     """
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+    # สำรองไฟล์ DB ก่อนแตะข้อมูล — ขั้นตอนท้ายของฟังก์ชันนี้ DROP คอลัมน์ file_data ทิ้งทั้งคอลัมน์
+    # ซึ่งเป็นที่เดียวที่เก็บ PDF ไว้ ถ้าพลาดโดยไม่มีสำเนา ผลงานของผู้ใช้หายถาวร กู้ไม่ได้เลย
+    backup = DB_PATH + '.pre-migration.bak'
+    if not os.path.exists(backup):
+        try:
+            shutil.copy2(DB_PATH, backup)
+        except Exception as e:
+            raise RuntimeError(
+                f'สำรองไฟล์ DB ไม่สำเร็จ จึงไม่เริ่ม migration เพื่อความปลอดภัยของข้อมูล: {e}'
+            )
+
     att_cols = {row[1] for row in con.execute("PRAGMA table_info(attachments)").fetchall()}
 
     if 'stored_name' not in att_cols:
         con.execute("ALTER TABLE attachments ADD COLUMN stored_name TEXT NOT NULL DEFAULT ''")
         att_cols.add('stored_name')
 
-    # ย้าย BLOB → file สำหรับแถวที่ stored_name ยังว่าง
+    # ย้าย BLOB → file
     rows = con.execute("SELECT id, filename, file_data FROM attachments").fetchall()
+    written, failed = [], []
     for row in rows:
         stored = uuid.uuid4().hex + '.pdf'
+        path   = _stored_path(stored)
         try:
             data = bytes(row['file_data']) if row['file_data'] else b''
-            with open(_stored_path(stored), 'wb') as f:
+            with open(path, 'wb') as f:
                 f.write(data)
-        except Exception:
-            stored = ''
+        except Exception as e:
+            failed.append(f"id={row['id']} ({row['filename']}): {e}")
+            continue
+        written.append(path)
         con.execute("UPDATE attachments SET stored_name=? WHERE id=?", [stored, row['id']])
+
+    # เขียนไฟล์ไม่ครบ = ห้ามไปต่อเด็ดขาด เพราะขั้นถัดไปลบคอลัมน์ file_data ทิ้ง
+    # เวอร์ชันก่อนหน้าตั้ง stored_name='' แล้วเดินหน้าต่อ ทำให้ PDF ของแถวที่เขียนพลาดหายถาวร
+    # โดยผู้ใช้ไม่รู้ตัวจนกดดาวน์โหลดแล้วเจอ 'ไฟล์หายจาก storage' ซึ่งสายไปแล้ว
+    # ยอมให้แอปเปิดไม่ขึ้นแล้วผู้ใช้ไปแก้สาเหตุ (ดิสก์เต็ม / สิทธิ์ / antivirus) ดีกว่าข้อมูลหาย
+    if failed:
+        con.rollback()                      # SQLite rollback DDL ได้ ALTER TABLE ข้างบนจึงถูกถอนด้วย
+        for p in written:
+            _safe_remove(p)                 # เก็บกวาดไฟล์ที่เขียนไปแล้ว ให้รันใหม่ได้จากสถานะสะอาด
+        raise RuntimeError(
+            f'migration ล้มเหลว เขียนไฟล์แนบไม่สำเร็จ {len(failed)} จาก {len(rows)} รายการ '
+            f'ข้อมูลเดิมยังอยู่ครบ สำเนาอยู่ที่ {backup} — ' + ' | '.join(failed)
+        )
 
     # ลบตารางชั่วคราวถ้าค้างจาก migration ที่ล้มเหลวก่อนหน้า
     con.execute("DROP TABLE IF EXISTS attachments_v2")
@@ -126,6 +284,23 @@ def _migrate_blobs_to_files(con):
 
 
 def init_db():
+    """
+    เตรียมฐานข้อมูลตอนแอปเริ่มทำงาน — สร้างตาราง + migrate schema แบบ additive
+
+    แนวคิดการ migrate (เลือกวิธี "ALTER TABLE เพิ่มคอลัมน์" แทน migration tool):
+    - แอปนี้เป็น desktop .exe ที่ผู้ใช้ทั่วไปรัน — ไม่มีขั้นตอน deploy จึงต้อง
+      อัปเกรด schema อัตโนมัติทุกครั้งที่เปิดโปรแกรม โดยห้ามทำข้อมูลเดิมหาย
+    - CREATE TABLE IF NOT EXISTS: สร้างเฉพาะเมื่อยังไม่มี (เครื่องใหม่)
+    - เทียบคอลัมน์จริงจาก PRAGMA table_info กับ dict `new_cols` แล้ว ALTER TABLE
+      ADD COLUMN เฉพาะตัวที่ขาด → backward compatible กับ DB จากเวอร์ชันเก่าทุกรุ่น
+    - กรณีพิเศษ: ถ้าพบคอลัมน์ file_data ในตาราง attachments แปลว่าเป็น schema
+      ยุค BLOB → เรียก _migrate_blobs_to_files() ย้ายเป็น file-based ก่อน
+
+    Parameters: ไม่มี (ใช้ค่า global DB_PATH / UPLOAD_FOLDER)
+
+    Returns:
+        None (side effect: ไฟล์ DB และโฟลเดอร์ uploads ถูกสร้าง/อัปเดตให้พร้อมใช้)
+    """
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     con = get_db()
 
@@ -230,6 +405,9 @@ def init_db():
 # Record helpers
 # ────────────────────────────────────────────────
 
+# Whitelist ชื่อคอลัมน์ที่ยอมรับจาก client — เป็นด่านป้องกัน SQL injection ชั้นแรก:
+# ชื่อคอลัมน์ใน INSERT/UPDATE ประกอบจาก set นี้เท่านั้น (ค่า data ใช้ placeholder ? เสมอ)
+# client ส่ง key แปลกปลอมมาก็จะถูกทิ้งเงียบ ๆ ใน sanitize_record()
 RECORD_COLS = {
     'p1_title', 'p1_fname', 'p1_lname', 'p1_edu', 'p1_edu_major',
     'p2_pos_current', 'p2_pos_level', 'p2_empid', 'p2_dept', 'p2_sec', 'p2_org',
@@ -240,6 +418,8 @@ RECORD_COLS = {
     'eval51_rows', 'eval52_rows',
 }
 
+# ฟิลด์บังคับฝั่ง server (ขั้นต่ำกว่าฝั่ง frontend ซึ่งบังคับมากกว่า) —
+# map คอลัมน์ → ป้ายชื่อภาษาไทย ใช้ประกอบข้อความ error ให้ผู้ใช้อ่านรู้เรื่อง
 REQUIRED_FIELDS = {
     'p1_fname':       'ชื่อ',
     'p1_lname':       'นามสกุล',
@@ -248,6 +428,30 @@ REQUIRED_FIELDS = {
 }
 
 def sanitize_record(d: dict) -> dict:
+    """
+    กรองและ normalize ข้อมูล record ที่รับจาก client ก่อนบันทึกลง DB
+
+    แนวคิด "whitelist ก่อน trust": วน loop ตาม RECORD_COLS (ไม่ใช่ตาม key ที่ client
+    ส่งมา) ดังนั้น key แปลกปลอมหลุดเข้า SQL ไม่ได้ และทุกคอลัมน์มีค่าเสมอ
+    (ที่ขาดจะถูกเติมเป็น '' หรือ '[]') — ทำให้ INSERT/UPDATE มีจำนวนคอลัมน์คงที่
+
+    กรณีพิเศษ eval51_rows / eval52_rows (ตารางรอบประเมินจาก UI แบบ dynamic rows):
+    เก็บใน DB เป็น JSON string เสมอ โดยรองรับ input 3 แบบ:
+    - list   → dumps ตรง ๆ (ensure_ascii=False เพื่อให้ภาษาไทยอ่านออกใน DB)
+    - str    → ลอง parse ก่อน ถ้า parse ได้และเป็น list ค่อย dumps กลับ
+               (round-trip นี้ทั้ง validate JSON และกัน type แปลก ๆ เช่น dict/number)
+    - อื่น ๆ / parse ไม่ผ่าน → fallback เป็น '[]' เพื่อไม่ให้ JSON เสียหลุดลง DB
+      แล้วไปพัง JSON.parse ฝั่ง frontend ทีหลัง
+
+    ฟิลด์ทั่วไป: cast เป็น str + strip ช่องว่างหัวท้าย (None → '')
+
+    Parameters:
+        d (dict): JSON body ดิบจาก request (อาจมี key เกิน/ขาด/type ผิดได้)
+
+    Returns:
+        dict: มี key ครบทุกตัวใน RECORD_COLS ค่าเป็น str ทั้งหมด พร้อมใช้เป็น
+              พารามิเตอร์ของ INSERT/UPDATE ได้ทันที
+    """
     allowed = {}
     for k in RECORD_COLS:
         val = d.get(k)
@@ -268,6 +472,16 @@ def sanitize_record(d: dict) -> dict:
     return allowed
 
 def validate_required(allowed: dict) -> list:
+    """
+    ตรวจว่าฟิลด์บังคับตาม REQUIRED_FIELDS ถูกกรอกครบหรือไม่
+
+    Parameters:
+        allowed (dict): ข้อมูลที่ผ่าน sanitize_record() แล้ว (ทุกค่าเป็น str)
+
+    Returns:
+        list[str]: รายชื่อป้ายภาษาไทยของฟิลด์ที่ยังว่าง เช่น ['ชื่อ', 'นามสกุล']
+                   — list ว่าง = ผ่านการตรวจ (ผู้เรียกใช้เช็ค truthiness ได้เลย)
+    """
     return [label for col, label in REQUIRED_FIELDS.items()
             if not allowed.get(col, '').strip()]
 
@@ -278,10 +492,28 @@ def validate_required(allowed: dict) -> list:
 
 @app.route('/')
 def index():
+    """
+    หน้าแรก — serve Single Page Application ทั้งหมดจาก template เดียว
+    (frontend จัดการ tab/ฟอร์ม/ตารางเองด้วย JavaScript แล้วคุยกลับมาทาง /api/*)
+
+    Returns:
+        str: HTML ของ templates/index.html
+    """
     return render_template('index.html')
 
 @app.route('/api/records', methods=['GET'])
 def get_all():
+    """
+    GET /api/records — ดึงรายการ record ทั้งหมด
+
+    เรียงด้วย id DESC (รายการใหม่สุดขึ้นก่อน) — ปริมาณข้อมูลระดับหน่วยงาน
+    ไม่มากพอที่จะต้องทำ pagination จึงส่งทั้งหมดในครั้งเดียวเพื่อให้
+    frontend ค้นหา/กรองฝั่ง client ได้ทันทีโดยไม่ต้อง round-trip
+
+    Returns:
+        Response: JSON array ของทุก record (eval51_rows/eval52_rows ยังเป็น
+                  JSON string ตามที่เก็บใน DB — frontend parse เอง)
+    """
     con = get_db()
     rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
     con.close()
@@ -289,6 +521,16 @@ def get_all():
 
 @app.route('/api/records/<int:rid>', methods=['GET'])
 def get_one(rid):
+    """
+    GET /api/records/<id> — ดึง record เดี่ยวตาม id
+
+    Parameters:
+        rid (int): id ของ record (Flask converter <int:> คัดกรอง type ให้แล้ว)
+
+    Returns:
+        Response: JSON object ของ record นั้น (200)
+                  หรือ {'error': 'not found'} (404) ถ้าไม่มี id นี้
+    """
     con = get_db()
     row = con.execute('SELECT * FROM records WHERE id=?', [rid]).fetchone()
     con.close()
@@ -298,6 +540,24 @@ def get_one(rid):
 
 @app.route('/api/records', methods=['POST'])
 def add_record():
+    """
+    POST /api/records — สร้าง record ใหม่จาก JSON body
+
+    ขั้นตอน: ตรวจ body เป็น dict → sanitize (whitelist) → ตรวจฟิลด์บังคับ
+    → INSERT แบบ dynamic
+
+    จุดสำคัญด้านความปลอดภัยของ SQL แบบ dynamic:
+    ชื่อคอลัมน์ใน f-string มาจาก sanitize_record() ซึ่งวนตาม RECORD_COLS
+    (ค่าคงที่ในโค้ด) เท่านั้น ส่วน "ค่า" ของผู้ใช้ผ่าน placeholder ? ทั้งหมด
+    → ไม่มีทางเกิด SQL injection แม้ query จะประกอบ string
+
+    Returns:
+        Response (JSON):
+        - 201 {'id': <rowid ใหม่>, 'ok': True} เมื่อสำเร็จ
+        - 400 body ไม่ใช่ JSON object
+        - 422 ฟิลด์บังคับไม่ครบ หรือชน integrity constraint
+        - 500 DB error / ข้อผิดพลาดไม่คาดคิด (rollback ให้แล้ว)
+    """
     d = request.get_json(force=True, silent=True)
     if d is None or not isinstance(d, dict):
         return jsonify({'error': 'request body ต้องเป็น JSON object ที่ถูกต้อง'}), 400
@@ -328,6 +588,24 @@ def add_record():
 
 @app.route('/api/records/<int:rid>', methods=['PUT'])
 def update_record(rid):
+    """
+    PUT /api/records/<id> — อัปเดต record เดิมทั้งแถว (full replace ตาม whitelist)
+
+    เป็นการอัปเดตแบบ "ทับทุกคอลัมน์": frontend ส่งฟอร์มทั้งชุดมาเสมอ ฟิลด์ที่
+    ผู้ใช้ลบค่าออกจึงถูกเซ็ตเป็น '' จริง ๆ ใน DB (ไม่ใช่ partial PATCH)
+    ตรวจว่ามี id นี้อยู่ก่อนด้วย SELECT เพื่อแยก 404 (ไม่พบ) ออกจาก 422
+    (อัปเดตไม่สำเร็จ) ให้ frontend แจ้งผู้ใช้ได้ตรงสาเหตุ
+
+    Parameters:
+        rid (int): id ของ record ที่จะแก้ไข
+
+    Returns:
+        Response (JSON):
+        - 200 {'ok': True} เมื่อสำเร็จ (พร้อม stamp เวลาใน updated)
+        - 400 body ไม่ใช่ JSON object / 404 ไม่พบ id
+        - 422 ฟิลด์บังคับไม่ครบ หรือ rowcount=0
+        - 500 DB error (rollback ให้แล้ว)
+    """
     d = request.get_json(force=True, silent=True)
     if d is None or not isinstance(d, dict):
         return jsonify({'error': 'request body ต้องเป็น JSON object ที่ถูกต้อง'}), 400
@@ -358,16 +636,36 @@ def update_record(rid):
 
 @app.route('/api/records/<int:rid>', methods=['DELETE'])
 def delete_record(rid):
+    """
+    DELETE /api/records/<id> — ลบ record หนึ่งรายการพร้อมไฟล์แนบทั้งหมด
+
+    ลำดับการลบสำคัญ 2 ชั้น:
+    1. ต้อง "อ่าน" รายชื่อไฟล์ (stored_name) ก่อนลบ row เพราะเมื่อ row ถูกลบ
+       ON DELETE CASCADE จะกวาดแถว attachments ทิ้งทันที ไม่เหลือทางตามหาชื่อไฟล์อีก
+    2. แต่ต้อง "ลบไฟล์จริง" หลัง commit เท่านั้น ถ้าลบก่อนแล้ว DB ล้มกลางทาง
+       rollback จะคืน row ที่ชี้ไปยังไฟล์ซึ่งถูกลบไปแล้ว ผู้ใช้เห็นว่ามีไฟล์แนบ
+       แต่กดดาวน์โหลดได้ 404 ซึ่งแย่กว่าไฟล์กำพร้าที่เสียแค่พื้นที่ดิสก์
+    (ถ้าลบไฟล์พลาด _safe_remove จะกลืน error → อย่างแย่คือไฟล์กำพร้า
+    แต่ข้อมูลใน DB ยัง consistent เสมอ)
+
+    Parameters:
+        rid (int): id ของ record ที่จะลบ
+
+    Returns:
+        Response (JSON): 200 {'ok': True} หรือ 500 พร้อมข้อความ error (rollback แล้ว)
+    """
     con = get_db()
     try:
-        # ลบไฟล์ physical ก่อน แล้วค่อยลบ DB row (CASCADE จัดการ attachments rows)
+        # อ่านชื่อไฟล์เก็บไว้ก่อน เพราะ CASCADE จะกวาดแถว attachments ทิ้งพร้อม record
         atts = con.execute(
             'SELECT stored_name FROM attachments WHERE record_id=?', [rid]
         ).fetchall()
-        for att in atts:
-            _safe_remove(_stored_path(att['stored_name']))
+        paths = [_stored_path(a['stored_name']) for a in atts if a['stored_name']]
         con.execute('DELETE FROM records WHERE id=?', [rid])
         con.commit()
+        # ลบไฟล์หลัง commit เท่านั้น ถ้าลบก่อนแล้ว DB ล้ม rollback จะคืน row ที่ชี้ไฟล์หาย
+        for p in paths:
+            _safe_remove(p)
         return jsonify({'ok': True})
     except Exception as e:
         con.rollback()
@@ -377,13 +675,25 @@ def delete_record(rid):
 
 @app.route('/api/records', methods=['DELETE'])
 def delete_all():
+    """
+    DELETE /api/records — ล้างข้อมูลทั้งระบบ (ทุก record + ไฟล์แนบทุกไฟล์)
+
+    ใช้หลักการเดียวกับ delete_record: เก็บรายชื่อไฟล์ไว้ก่อน → DELETE FROM records
+    ให้ CASCADE ล้างตาราง attachments ตาม → commit → แล้วจึงลบไฟล์บนดิสก์
+    (frontend มี confirm dialog ป้องกันการกดพลาดอยู่แล้วชั้นหนึ่ง)
+
+    Returns:
+        Response (JSON): 200 {'ok': True} หรือ 500 พร้อมข้อความ error (rollback แล้ว)
+    """
     con = get_db()
     try:
         atts = con.execute('SELECT stored_name FROM attachments').fetchall()
-        for att in atts:
-            _safe_remove(_stored_path(att['stored_name']))
+        paths = [_stored_path(a['stored_name']) for a in atts if a['stored_name']]
         con.execute('DELETE FROM records')
         con.commit()
+        # ลบไฟล์หลัง commit ด้วยเหตุผลเดียวกับ delete_record
+        for p in paths:
+            _safe_remove(p)
         return jsonify({'ok': True})
     except Exception as e:
         con.rollback()
@@ -398,6 +708,20 @@ def delete_all():
 
 @app.route('/api/records/<int:rid>/attachments', methods=['GET'])
 def list_attachments(rid):
+    """
+    GET /api/records/<id>/attachments — รายการไฟล์แนบ (เฉพาะ metadata)
+
+    จงใจ SELECT รายคอลัมน์โดย "ไม่รวม stored_name" — ชื่อไฟล์บนดิสก์เป็น
+    รายละเอียดภายใน server ไม่จำเป็นและไม่ควรเปิดเผยให้ client
+    (client อ้างไฟล์ผ่าน att id → /api/attachments/<id> แทน)
+
+    Parameters:
+        rid (int): id ของ record เจ้าของไฟล์แนบ
+
+    Returns:
+        Response: JSON array ของ metadata ไฟล์แนบ เรียงตาม book_no
+                  (record ที่ไม่มีไฟล์จะได้ [] — ไม่ถือเป็น error)
+    """
     con = get_db()
     rows = con.execute(
         'SELECT id, record_id, book_no, filename, mime_type, file_size, uploaded_at '
@@ -408,6 +732,46 @@ def list_attachments(rid):
 
 @app.route('/api/records/<int:rid>/attachments', methods=['POST'])
 def upload_attachment(rid):
+    """
+    POST /api/records/<id>/attachments — อัปโหลด PDF หนึ่งเล่ม (upsert ต่อช่อง book_no)
+
+    รองรับ input 2 รูปแบบ (ตรวจจาก Content-Type):
+    1. multipart/form-data field 'file' + 'book_no' — เส้นทางหลักที่ frontend ใช้
+       Werkzeug สตรีมไฟล์ลง temp ให้ ไม่ต้องโหลดทั้งก้อนเข้า memory ก่อน
+    2. JSON body: {book_no, filename, data:<base64 หรือ data-URL>} — คงไว้สำหรับ
+       เครื่องมืออื่น เช่น curl รองรับทั้ง base64 เปล่าและ data-URL จึงตัด prefix
+       'data:...;base64,' ด้วย split(',')[-1] ก่อน decode
+       เส้นทางนี้ payload บวม ~33% และกิน memory ทั้งฝั่ง client และ server
+       อัปได้จริงประมาณ 82 MB ตาม MAX_CONTENT_LENGTH 110 MB
+
+    อัลกอริทึม (ออกแบบให้ DB เป็น source of truth เสมอ):
+    1. decode/อ่าน bytes → ตรวจว่าไม่ว่าง ไม่เกิน MAX_PDF_SIZE และมี header '%PDF-'
+       ใน 1024 ไบต์แรก → ตรวจว่า record มีจริง ทั้งหมดนี้ทำ "ก่อน" แตะดิสก์
+       เพื่อไม่ให้มีไฟล์ขยะเขียนลงไปแล้วต้องตามลบ
+    2. เขียนไฟล์ใหม่ลงดิสก์ด้วยชื่อ UUID ก่อนแตะ DB
+       (ใช้ UUID เพื่อกันชื่อชนกันและตัดปัญหาชื่อไฟล์ภาษาไทย/อักขระพิเศษบนดิสก์)
+    3. จำ path ของไฟล์เก่าในช่อง (record_id, book_no) เดียวกันไว้ แต่ยังไม่ลบ
+    4. DELETE row เก่า + INSERT row ใหม่ = พฤติกรรม "replace" — บังคับให้
+       1 record มีไฟล์ได้ช่องละ 1 ไฟล์ (เล่ม 1-3 และประกาศ 'ann')
+    5. commit ผ่านแล้วจึงลบไฟล์เก่า — ลำดับนี้สำคัญ ถ้าลบก่อน commit แล้วเกิด
+       exception ระหว่างทาง rollback จะคืน row เก่าที่ชี้ไปยังไฟล์ที่หายไปแล้ว
+    6. ถ้า DB ล้มเหลว: rollback แล้วลบไฟล์ที่เพิ่งเขียนทิ้ง (ขั้นตอน compensate)
+       เพื่อไม่ให้เกิดไฟล์กำพร้าที่ไม่มี row ชี้ถึง ส่วนไฟล์เก่ายังอยู่ครบคู่กับ row เดิม
+
+    หมายเหตุ: filename ผ่าน sanitize_display_name() ซึ่งเก็บอักษรไทยไว้ครบ
+    (ใช้เป็น download_name ตอนดาวน์โหลด) ชื่อนี้ไม่เคยถูกใช้ประกอบ path บนดิสก์
+
+    Parameters:
+        rid (int): id ของ record เจ้าของไฟล์
+
+    Returns:
+        Response (JSON):
+        - 201 {'id', 'ok', 'filename', 'size'} เมื่อสำเร็จ
+        - 400 ไม่มีไฟล์ / ไฟล์ว่าง / ไม่ใช่ PDF / base64 เสียหาย / body ผิดรูปแบบ
+        - 404 ไม่พบ record id นี้ (เช็กก่อนเขียนไฟล์ และดักกรณี race ที่ FK constraint ด้วย)
+        - 413 ไฟล์เกิน MAX_PDF_SIZE (100 MB)
+        - 500 เขียนไฟล์หรือ DB ล้มเหลว (พร้อม rollback ทั้งไฟล์และ DB)
+    """
     if request.is_json:
         body = request.get_json(force=True, silent=True)
         if body is None or not isinstance(body, dict):
@@ -429,7 +793,28 @@ def upload_attachment(rid):
     else:
         return jsonify({'error': 'no file provided'}), 400
 
-    safe_name   = secure_filename(filename) or f'book_{book_no}.pdf'
+    # ตรวจเนื้อหาไฟล์ก่อนแตะดิสก์ — ของพวกนี้เช็กฝั่ง client อยู่แล้วแต่ยกเลิกได้ด้วยการยิง API ตรง
+    # และถ้าหลุดเข้ามาได้ ไฟล์จะถูก serve กลับด้วย Content-Type: application/pdf ผ่าน /preview
+    # (mime ด้านล่าง hardcode ไว้ ความถูกต้องของมันจึงขึ้นอยู่กับด่านนี้ทั้งหมด)
+    if not file_bytes:
+        return jsonify({'error': 'ไฟล์ว่าง ไม่มีข้อมูลให้บันทึก'}), 400
+    if len(file_bytes) > MAX_PDF_SIZE:
+        return jsonify({'error': 'ไฟล์มีขนาดใหญ่เกินไป — กรุณาลดขนาดไฟล์ให้ต่ำกว่า 100 MB แล้วลองใหม่อีกครั้ง'}), 413
+    # มองหา header '%PDF-' ใน 1024 ไบต์แรก ไม่บังคับว่าต้องอยู่ไบต์ที่ 0
+    # เพราะไฟล์จริงจากเครื่องสแกนหรือโปรแกรมบางตัวมี BOM/ขยะนำหน้า และ PDF reader ทุกตัว
+    # ก็สแกนช่วงต้นไฟล์แบบเดียวกัน (ISO 32000-1 กำหนดไบต์ที่ 0 แต่ของจริงผ่อนปรนกว่านั้น)
+    if b'%PDF-' not in file_bytes[:1024]:
+        return jsonify({'error': 'ไฟล์ไม่ใช่ PDF ที่ถูกต้อง — รองรับเฉพาะไฟล์ .pdf เท่านั้น'}), 400
+
+    # เช็กว่า record มีจริง "ก่อน" เขียนไฟล์ลงดิสก์ ไม่ใช่รอให้ INSERT ชน FK constraint
+    # แล้วตอบ 500 ซึ่งสื่อว่า server พัง ทั้งที่จริงคือ client อ้างถึงของที่ไม่มีอยู่
+    # (ยังมีช่องว่างเล็ก ๆ ที่ record ถูกลบหลังเช็กแต่ก่อน INSERT — ดักด้วย
+    # except sqlite3.IntegrityError ด้านล่าง ซึ่งตอบ 404 เหมือนกันและลบไฟล์ที่เพิ่งเขียนทิ้ง)
+    with closing(get_db()) as con:
+        if not con.execute('SELECT 1 FROM records WHERE id=?', [rid]).fetchone():
+            return jsonify({'error': 'ไม่พบข้อมูล id=' + str(rid)}), 404
+
+    safe_name   = sanitize_display_name(filename, f'book_{book_no}.pdf')
     stored_name = uuid.uuid4().hex + '.pdf'
     file_path   = _stored_path(stored_name)
 
@@ -444,14 +829,15 @@ def upload_attachment(rid):
     mime = 'application/pdf'
     size = len(file_bytes)
     con  = get_db()
+    old_path = None
     try:
-        # ลบไฟล์เก่าออกจาก disk ถ้ามีอยู่
+        # จำ path ของไฟล์เก่าไว้ก่อน แต่ยังไม่ลบ — ต้องรอให้ commit ผ่านก่อน (ดูด้านล่าง)
         old = con.execute(
             'SELECT stored_name FROM attachments WHERE record_id=? AND book_no=?',
             [rid, book_no]
         ).fetchone()
         if old and old['stored_name']:
-            _safe_remove(_stored_path(old['stored_name']))
+            old_path = _stored_path(old['stored_name'])
 
         con.execute('DELETE FROM attachments WHERE record_id=? AND book_no=?', [rid, book_no])
         cur = con.execute(
@@ -461,7 +847,17 @@ def upload_attachment(rid):
             [rid, book_no, safe_name, stored_name, mime, size, now_str()]
         )
         con.commit()
+        # commit ผ่านแล้วจึงลบไฟล์เก่า ถ้าลบก่อนแล้วมี exception ระหว่างทาง rollback จะคืน
+        # row เก่ากลับมาชี้ไปยังไฟล์ที่ถูกลบไปแล้ว ผู้ใช้เห็นว่ามีไฟล์แนบแต่กดดาวน์โหลดได้ 404
+        # ไฟล์กำพร้าเสียแค่พื้นที่ดิสก์ แต่ row ที่ชี้ไฟล์หายทำให้ผู้ใช้เข้าใจผิดว่ายังมีผลงานอยู่
+        _safe_remove(old_path)
         return jsonify({'id': cur.lastrowid, 'ok': True, 'filename': safe_name, 'size': size}), 201
+    except sqlite3.IntegrityError:
+        # ชน FK constraint = record หายไประหว่างที่เช็กกับที่ INSERT (ผู้ใช้อีกหน้าต่างลบทิ้ง)
+        # สาเหตุคือ client อ้างถึงของที่ไม่มีอยู่ ไม่ใช่ server พัง จึงตอบ 404 ไม่ใช่ 500
+        con.rollback()
+        _safe_remove(file_path)
+        return jsonify({'error': 'ไม่พบข้อมูล id=' + str(rid)}), 404
     except Exception as e:
         con.rollback()
         _safe_remove(file_path)  # rollback ไฟล์ที่เพิ่งเขียน
@@ -471,6 +867,22 @@ def upload_attachment(rid):
 
 @app.route('/api/attachments/<int:att_id>', methods=['GET'])
 def download_attachment(att_id):
+    """
+    GET /api/attachments/<att_id> — ดาวน์โหลดไฟล์ PDF
+
+    as_attachment=True → ส่ง header Content-Disposition: attachment ให้เบราว์เซอร์
+    เปิด dialog บันทึกไฟล์ โดยตั้งชื่อไฟล์ที่ผู้ใช้เห็นเป็นชื่อต้นฉบับ (filename)
+    ไม่ใช่ชื่อ UUID บนดิสก์ — ผู้ใช้ไม่ต้องรู้ว่า server เก็บไฟล์ชื่ออะไร
+
+    ตรวจ 2 ชั้น: row ใน DB ต้องมี และไฟล์บนดิสก์ต้องอยู่จริง (กันกรณี
+    ไฟล์ถูกลบมือ/migration เขียนไฟล์พลาด) — ทั้งสองกรณีตอบ 404 พร้อมเหตุผลต่างกัน
+
+    Parameters:
+        att_id (int): id ของแถวในตาราง attachments
+
+    Returns:
+        Response: ไฟล์ PDF (200) หรือ JSON error (404)
+    """
     con = get_db()
     row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
     con.close()
@@ -484,6 +896,19 @@ def download_attachment(att_id):
 
 @app.route('/api/attachments/<int:att_id>/preview', methods=['GET'])
 def preview_attachment(att_id):
+    """
+    GET /api/attachments/<att_id>/preview — เปิดดู PDF ในเบราว์เซอร์ (inline)
+
+    ต่างจาก download_attachment แค่จุดเดียว: as_attachment=False →
+    Content-Disposition: inline ทำให้เบราว์เซอร์ render PDF ในแท็บใหม่
+    แทนการดาวน์โหลด (frontend ใช้กับปุ่ม "ดูตัวอย่าง PDF")
+
+    Parameters:
+        att_id (int): id ของแถวในตาราง attachments
+
+    Returns:
+        Response: ไฟล์ PDF แสดง inline (200) หรือ JSON error (404)
+    """
     con = get_db()
     row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
     con.close()
@@ -497,13 +922,27 @@ def preview_attachment(att_id):
 
 @app.route('/api/attachments/<int:att_id>', methods=['DELETE'])
 def delete_attachment(att_id):
+    """
+    DELETE /api/attachments/<att_id> — ลบไฟล์แนบเดี่ยว (ทั้งไฟล์บนดิสก์และ row)
+
+    อ่านชื่อไฟล์ก่อนลบ row แต่ลบไฟล์จริงหลัง commit (เหตุผลเดียวกับ delete_record)
+    และจงใจตอบ 200 แม้ไม่พบ att_id เพราะ DELETE เป็น idempotent:
+    ผลลัพธ์สุดท้ายที่ client ต้องการคือ "ไม่มีไฟล์นี้แล้ว" ซึ่งเป็นจริง
+
+    Parameters:
+        att_id (int): id ของแถวในตาราง attachments
+
+    Returns:
+        Response (JSON): 200 {'ok': True} หรือ 500 พร้อมข้อความ error (rollback แล้ว)
+    """
     con = get_db()
     try:
         row = con.execute('SELECT stored_name FROM attachments WHERE id=?', [att_id]).fetchone()
-        if row:
-            _safe_remove(_stored_path(row['stored_name']))
+        path = _stored_path(row['stored_name']) if row and row['stored_name'] else None
         con.execute('DELETE FROM attachments WHERE id=?', [att_id])
         con.commit()
+        # ลบไฟล์หลัง commit ด้วยเหตุผลเดียวกับ delete_record
+        _safe_remove(path)
         return jsonify({'ok': True})
     except Exception as e:
         con.rollback()
@@ -515,6 +954,9 @@ def delete_attachment(att_id):
 # ────────────────────────────────────────────────
 # Global error handlers
 # ────────────────────────────────────────────────
+# บังคับให้ error ทุกชนิดตอบกลับเป็น JSON แทนหน้า HTML default ของ Flask —
+# เพราะ frontend เรียกผ่าน fetch() และคาดหวัง response.json() เสมอ
+# (ถ้าปล่อยเป็น HTML ฝั่ง JS จะ parse พังและผู้ใช้เห็น error ที่อ่านไม่รู้เรื่อง)
 
 @app.errorhandler(400)
 def bad_request(e):
@@ -530,7 +972,9 @@ def internal_error(e):
 
 @app.errorhandler(413)
 def request_too_large(e):
-    return jsonify({'error': 'ไฟล์มีขนาดใหญ่เกินไป — กรุณาลดขนาดไฟล์ให้ต่ำกว่า 150 MB แล้วลองใหม่อีกครั้ง'}), 413
+    # 413 เกิดเมื่อ payload เกิน MAX_CONTENT_LENGTH (110 MB)
+    # frontend ส่ง multipart แล้ว payload ≈ ขนาดไฟล์ ตัวเลขที่แจ้งจึงตรงกับเพดาน 100 MB ใน UI
+    return jsonify({'error': 'ไฟล์มีขนาดใหญ่เกินไป — กรุณาลดขนาดไฟล์ให้ต่ำกว่า 100 MB แล้วลองใหม่อีกครั้ง'}), 413
 
 
 # ────────────────────────────────────────────────
@@ -539,6 +983,21 @@ def request_too_large(e):
 
 @app.route('/api/stats', methods=['GET'])
 def stats():
+    """
+    GET /api/stats — สถิติสรุปสำหรับหน้า dashboard
+
+    ใช้ GROUP BY ให้ SQLite นับแทนการดึงทุก row มานับใน Python —
+    เร็วกว่าและส่งข้อมูลข้ามน้อยกว่า ('ผ่าน' hardcode ตรงกับตัวเลือก
+    ในฟอร์มฝั่ง frontend)
+
+    Returns:
+        Response (JSON): {
+            'total':     จำนวน record ทั้งหมด,
+            'passed':    จำนวนที่ p5_work_result = 'ผ่าน',
+            'by_result': [{result, cnt}, ...]  แยกตามผลการพิจารณา,
+            'by_level':  [{level, cnt}, ...]   แยกตามระดับตำแหน่งปัจจุบัน
+        }
+    """
     con = get_db()
     total  = con.execute('SELECT COUNT(*) FROM records').fetchone()[0]
     passed = con.execute("SELECT COUNT(*) FROM records WHERE p5_work_result='ผ่าน'").fetchone()[0]
@@ -555,6 +1014,22 @@ def stats():
 
 @app.route('/api/export/csv')
 def export_csv_server():
+    """
+    GET /api/export/csv — export ทุก record เป็นไฟล์ CSV ให้ดาวน์โหลด
+
+    จุดสำคัญคือภาษาไทย + Excel: นำหน้าเนื้อหาด้วย BOM (U+FEFF, ตัวอักษร
+    ที่มองไม่เห็นหน้า '﻿') เพราะ Excel บน Windows จะเดา encoding เป็น
+    ANSI ถ้าไม่มี BOM → ภาษาไทยกลายเป็นตัวอักษรขยะ BOM คือสัญญาณบอก
+    Excel ว่า "ไฟล์นี้เป็น UTF-8"
+
+    ใช้ csv.DictWriter เขียนลง StringIO ใน memory (ไม่สร้างไฟล์ชั่วคราว)
+    โดย fieldnames เอาจาก keys ของแถวแรก — ทุกแถวมีคอลัมน์ชุดเดียวกัน
+    เพราะมาจาก SELECT * ตารางเดียว
+
+    Returns:
+        Response: ไฟล์ CSV (Content-Disposition: attachment ชื่อไฟล์ติดวันที่)
+                  หรือ 204 No Content ถ้ายังไม่มีข้อมูลเลย
+    """
     import csv, io as _io
     con  = get_db()
     rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
@@ -577,9 +1052,39 @@ def export_csv_server():
 PORT = 5000
 
 def run_flask():
+    """
+    รัน Flask server สำหรับโหมด desktop (ถูกเรียกใน background thread)
+
+    - host=127.0.0.1: รับเฉพาะ local — ป้องกันเครื่องอื่นใน network เข้าถึงข้อมูล HR
+    - use_reloader=False: จำเป็นมาก เพราะ reloader ของ Flask ทำงานด้วยการ
+      fork/spawn process ใหม่ ซึ่งทำไม่ได้ใน thread ลูก (จะ crash ทันที)
+
+    Returns:
+        None (blocking — วนรับ request จนกว่า process จะจบ)
+    """
     app.run(host='127.0.0.1', port=PORT, debug=False, use_reloader=False)
 
 def main():
+    """
+    Entry point ของแอป — เตรียม DB แล้วเลือกโหมดการรันตาม environment
+
+    สถาปัตยกรรมโหมด desktop (มี pywebview):
+    Flask รันใน daemon thread ส่วน webview (หน้าต่าง native) รันใน main thread
+    เพราะ GUI library ส่วนใหญ่บังคับให้ event loop อยู่ main thread เท่านั้น
+    การตั้ง daemon=True ทำให้ Flask thread ถูกเก็บกวาดอัตโนมัติเมื่อผู้ใช้
+    ปิดหน้าต่าง (ไม่ต้องจัดการ shutdown เอง)
+    sleep(0.8) = รอให้ server เปิด port เสร็จก่อน webview โหลด URL
+    (วิธี simple แบบ fixed-delay — แลกความง่ายกับ delay เล็กน้อยตอนเปิด)
+
+    โหมด fallback (ไม่มี pywebview เช่น รันบนเครื่อง dev):
+    รันเป็น web server ปกติให้เปิดผ่านเบราว์เซอร์ ผูกที่ 127.0.0.1 เท่านั้นเหมือนโหมด desktop
+    เพราะ API ไม่มี authentication เลย ถ้าผูก 0.0.0.0 ทุกเครื่องในเครือข่ายจะอ่านและลบข้อมูล HR ได้
+    debug ปิดเป็นค่าเริ่มต้น เปิดได้ด้วย HR_DEBUG=1 สำหรับตอน dev เท่านั้น เพราะ Werkzeug debugger
+    มีคอนโซลรัน Python ได้ ซึ่งเท่ากับเปิดทาง RCE ถ้าหลุดออกไปอยู่บนเครื่องผู้ใช้
+
+    Returns:
+        None
+    """
     init_db()
     if HAS_WEBVIEW:
         t = threading.Thread(target=run_flask, daemon=True)
@@ -593,7 +1098,7 @@ def main():
         webview.start(debug=False)
     else:
         print(f'[HR System] เปิด http://127.0.0.1:{PORT}  (Ctrl+C เพื่อหยุด)')
-        app.run(host='0.0.0.0', port=PORT, debug=True)
+        app.run(host='127.0.0.1', port=PORT, debug=os.environ.get('HR_DEBUG') == '1')
 
 if __name__ == '__main__':
     main()

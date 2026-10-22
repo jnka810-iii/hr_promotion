@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>System Map · BoxBox</title>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+<style>
+  :root {
+    --bg: #f8fafc; --fg: #0f172a; --muted: #64748b; --card: #ffffff;
+    --border: #e2e8f0; --shadow: 0 4px 16px rgba(15,23,42,.08);
+    --frontend:#3b82f6; --api:#8b5cf6; --backend:#10b981;
+    --database:#f59e0b; --external:#ec4899;
+  }
+  [data-theme="dark"] {
+    --bg:#0f172a; --fg:#f1f5f9; --muted:#94a3b8; --card:#1e293b;
+    --border:#334155; --shadow:0 4px 16px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between;
+    padding:14px 24px; border-bottom:1px solid var(--border); background:var(--card); }
+  .brand { font-weight:700; font-size:18px; display:flex; align-items:center; gap:10px; }
+  .brand-dot { width:14px; height:14px; border-radius:4px;
+    background:linear-gradient(135deg,var(--frontend),var(--external)); }
+  .stack { display:flex; gap:8px; flex-wrap:wrap; }
+  .badge { padding:4px 10px; border-radius:999px; background:var(--bg);
+    border:1px solid var(--border); font-size:12px; color:var(--muted); }
+  .theme-btn { background:transparent; border:1px solid var(--border);
+    border-radius:8px; padding:6px 12px; cursor:pointer; color:var(--fg); }
+  .headline { padding:20px 24px 8px; font-size:20px; font-weight:600; max-width:900px; }
+  .subline { padding:0 24px 16px; color:var(--muted); font-size:14px; }
+  #cy { width:100%; height: calc(100vh - 220px); background:var(--bg); }
+  .legend { position:absolute; bottom:18px; left:18px; background:var(--card);
+    border:1px solid var(--border); border-radius:12px; padding:10px 14px;
+    box-shadow:var(--shadow); display:flex; gap:14px; flex-wrap:wrap; font-size:12px; z-index:5; }
+  .legend-item { display:flex; align-items:center; gap:6px; }
+  .legend-dot { width:12px; height:12px; border-radius:4px; }
+  .controls { position:absolute; top:172px; right:18px; display:flex; gap:8px; z-index:5; }
+  .ctrl-btn { background:var(--card); border:1px solid var(--border); border-radius:8px;
+    padding:6px 12px; cursor:pointer; color:var(--fg); box-shadow:var(--shadow); }
+  aside.panel {
+    position:fixed; top:0; right:0; height:100%; width:380px; max-width:90vw;
+    background:var(--card); border-left:1px solid var(--border); box-shadow:var(--shadow);
+    transform:translateX(110%); transition:transform .25s ease; z-index:20;
+    display:flex; flex-direction:column;
+  }
+  aside.panel.open { transform:translateX(0); }
+  .panel-head { padding:20px 24px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between; }
+  .panel-title { font-size:18px; font-weight:700; display:flex; align-items:center; gap:10px; }
+  .panel-chip { padding:3px 8px; border-radius:6px; font-size:11px; color:white;
+    text-transform:uppercase; letter-spacing:.5px; }
+  .panel-body { padding:20px 24px; overflow-y:auto; flex:1; }
+  .panel-body h4 { margin:18px 0 8px; font-size:13px; text-transform:uppercase;
+    letter-spacing:.5px; color:var(--muted); }
+  .panel-body p.explain { font-size:15px; line-height:1.5; }
+  .panel-body ul { padding-left:18px; margin:0; }
+  .panel-body li { margin:4px 0; font-size:13px; color:var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; }
+  .conn { padding:8px 12px; background:var(--bg); border-radius:8px; margin:6px 0;
+    font-size:13px; border:1px solid var(--border); }
+  .close-btn { background:transparent; border:none; font-size:22px; cursor:pointer;
+    color:var(--muted); line-height:1; }
+  .credit { position:absolute; bottom:18px; right:18px; background:var(--card);
+    border:1px solid var(--border); border-radius:12px; padding:8px 14px;
+    box-shadow:var(--shadow); font-size:12px; color:var(--muted);
+    display:flex; align-items:center; gap:8px; z-index:5; }
+  .credit a { color:var(--fg); text-decoration:none; font-weight:600; }
+  .credit a:hover { text-decoration:underline; }
+  .credit-dot { width:10px; height:10px; border-radius:3px;
+    background:linear-gradient(135deg,var(--frontend),var(--external)); }
+  .credit-sep { color:var(--muted); }
+  .credit-fb { display:inline-flex; align-items:center; gap:4px; color:#1877F2 !important; }
+  .credit-fb:hover { color:#0d65d9 !important; }
+  @media (max-width: 640px) {
+    header { flex-wrap:wrap; gap:10px; }
+    .stack { order:3; width:100%; }
+    aside.panel { width:100%; }
+    .credit { bottom:auto; top:8px; right:8px; font-size:11px; padding:6px 10px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-dot"></div>
+    <span id="project-name">System Map</span>
+  </div>
+  <div class="stack" id="stack"></div>
+  <button class="theme-btn" id="theme-btn">Light mode</button>
+</header>
+
+<div class="headline" id="headline"></div>
+<div class="subline">Click any block to learn what it does. Drag to pan, scroll to zoom.</div>
+
+<div class="controls">
+  <button class="ctrl-btn" id="fit-btn">Fit to screen</button>
+  <button class="ctrl-btn" id="reset-btn">Reset view</button>
+</div>
+
+<div id="cy"></div>
+
+<div class="legend" id="legend"></div>
+
+<div class="credit">
+  <span class="credit-dot"></span>
+  Made with <a href="https://github.com/aiunlocked1412/boxbox" target="_blank" rel="noopener">BoxBox</a>
+  by <a href="https://github.com/aiunlocked1412" target="_blank" rel="noopener">AI UNLOCKED</a>
+  <span class="credit-sep">·</span>
+  <a href="https://www.facebook.com/aiunlockedvip" target="_blank" rel="noopener" class="credit-fb" aria-label="AI UNLOCKED on Facebook">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.78-3.89 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.77l-.44 2.89h-2.33v6.99A10 10 0 0 0 22 12z"/></svg>
+    Facebook
+  </a>
+</div>
+
+<aside class="panel" id="panel" aria-hidden="true">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="panel-chip" id="panel-chip">layer</span>
+      <span id="panel-name"></span>
+    </div>
+    <button class="close-btn" id="close-btn" aria-label="Close">×</button>
+  </div>
+  <div class="panel-body">
+    <p class="explain" id="panel-explain"></p>
+    <h4>Connections in</h4>
+    <div id="panel-in"></div>
+    <h4>Connections out</h4>
+    <div id="panel-out"></div>
+    <h4>Files</h4>
+    <ul id="panel-files"></ul>
+  </div>
+</aside>
+
+<script>
+const DATA = {
+  "project_name": "hr_promotion",
+  "stack": [
+    { "name": "Python", "category": "backend", "icon": "python" },
+    { "name": "Flask", "category": "backend", "icon": "python" },
+    { "name": "SQLite", "category": "database", "icon": "sqlite" },
+    { "name": "pywebview", "category": "frontend", "icon": "box" },
+    { "name": "Bootstrap 5", "category": "frontend", "icon": "box" },
+    { "name": "Chart.js", "category": "frontend", "icon": "chart" },
+    { "name": "Jinja2", "category": "frontend", "icon": "box" }
+  ],
+  "nodes": [
+    {
+      "id": "personnel_form",
+      "name": "Personnel Data Entry",
+      "plain_english": "HR staff fill in a multi-page form with the employee's personal info, current role, and the position they are being considered for.",
+      "layer": "frontend",
+      "rank": 0,
+      "icon": "file",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "work_evaluation",
+      "name": "Work Evaluation & Scoring",
+      "plain_english": "Captures past achievements, evaluation scores, and structured evaluation grid rows for each promotion candidate.",
+      "layer": "frontend",
+      "rank": 0,
+      "icon": "chart",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "dashboard",
+      "name": "Summary Dashboard",
+      "plain_english": "Shows charts with total candidates, pass/fail counts, and breakdowns by position level.",
+      "layer": "frontend",
+      "rank": 0,
+      "icon": "dashboard",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "records_list",
+      "name": "Records List & Search",
+      "plain_english": "A searchable table where HR staff browse, filter, edit, or delete promotion records.",
+      "layer": "frontend",
+      "rank": 0,
+      "icon": "globe",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "records_api",
+      "name": "Records CRUD API",
+      "plain_english": "Server-side endpoints that create, read, update, and delete promotion records after validating required Thai fields.",
+      "layer": "api",
+      "rank": 1,
+      "icon": "settings",
+      "files": ["app.py"],
+      "external": false
+    },
+    {
+      "id": "attachments",
+      "name": "PDF Attachment API",
+      "plain_english": "Handles uploading, storing, previewing, and downloading PDF documents linked to each promotion record.",
+      "layer": "api",
+      "rank": 1,
+      "icon": "file",
+      "files": ["app.py", "templates/index.html"],
+      "external": false
+    },
+    {
+      "id": "export",
+      "name": "CSV Export API",
+      "plain_english": "Streams all promotion records as a CSV file so HR staff can open them in Excel.",
+      "layer": "api",
+      "rank": 1,
+      "icon": "file",
+      "files": ["app.py"],
+      "external": false
+    },
+    {
+      "id": "infrastructure",
+      "name": "Desktop Launcher",
+      "plain_english": "Starts Flask in a background thread and opens the app as a native Windows desktop window using pywebview.",
+      "layer": "backend",
+      "rank": 2,
+      "icon": "settings",
+      "files": ["app.py", ".gitignore"],
+      "external": false
+    },
+    {
+      "id": "database",
+      "name": "Database & Migrations",
+      "plain_english": "SQLite database storing all promotion records and attachment metadata, with automatic schema migration for legacy columns.",
+      "layer": "database",
+      "rank": 3,
+      "icon": "sqlite",
+      "files": ["hr_promotion.db", "app.py", "check_db.py", "fix_db.py"],
+      "external": false
+    },
+    {
+      "id": "google_fonts",
+      "name": "Google Fonts",
+      "plain_english": "Loads the Sarabun Thai-language typeface for the UI.",
+      "layer": "external",
+      "rank": 1,
+      "icon": "globe",
+      "files": [],
+      "external": true
+    },
+    {
+      "id": "bootstrap_cdn",
+      "name": "Bootstrap CDN",
+      "plain_english": "Delivers Bootstrap 5 CSS for responsive layout and UI components.",
+      "layer": "external",
+      "rank": 1,
+      "icon": "box",
+      "files": [],
+      "external": true
+    },
+    {
+      "id": "fontawesome_cdn",
+      "name": "Font Awesome CDN",
+      "plain_english": "Delivers icon glyphs used throughout the interface.",
+      "layer": "external",
+      "rank": 1,
+      "icon": "box",
+      "files": [],
+      "external": true
+    },
+    {
+      "id": "chartjs_cdn",
+      "name": "Chart.js CDN",
+      "plain_english": "Renders bar and summary charts on the dashboard tab.",
+      "layer": "external",
+      "rank": 1,
+      "icon": "chart",
+      "files": [],
+      "external": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "personnel_form",
+      "to": "records_api",
+      "label": "submits employee personal details and position data",
+      "kind": "api_call"
+    },
+    {
+      "from": "work_evaluation",
+      "to": "records_api",
+      "label": "submits evaluation scores and grid rows",
+      "kind": "api_call"
+    },
+    {
+      "from": "personnel_form",
+      "to": "attachments",
+      "label": "uploads announcement PDF and full work portfolio PDFs",
+      "kind": "api_call"
+    },
+    {
+      "from": "records_list",
+      "to": "records_api",
+      "label": "fetches all records for display, triggers edit and delete",
+      "kind": "api_call"
+    },
+    {
+      "from": "records_list",
+      "to": "export",
+      "label": "requests CSV download of all records",
+      "kind": "api_call"
+    },
+    {
+      "from": "dashboard",
+      "to": "records_api",
+      "label": "fetches statistics grouped by result and position level",
+      "kind": "api_call"
+    },
+    {
+      "from": "records_api",
+      "to": "database",
+      "label": "reads and writes promotion records",
+      "kind": "db_write"
+    },
+    {
+      "from": "attachments",
+      "to": "database",
+      "label": "reads and writes attachment metadata linked to records",
+      "kind": "db_write"
+    },
+    {
+      "from": "export",
+      "to": "database",
+      "label": "reads all records to build the CSV file",
+      "kind": "db_read"
+    },
+    {
+      "from": "infrastructure",
+      "to": "database",
+      "label": "initialises tables and runs schema migrations on startup",
+      "kind": "db_write"
+    },
+    {
+      "from": "personnel_form",
+      "to": "google_fonts",
+      "label": "downloads Sarabun Thai font for the UI",
+      "kind": "external_call"
+    },
+    {
+      "from": "personnel_form",
+      "to": "bootstrap_cdn",
+      "label": "loads Bootstrap CSS and JS bundle",
+      "kind": "external_call"
+    },
+    {
+      "from": "personnel_form",
+      "to": "fontawesome_cdn",
+      "label": "loads Font Awesome icon stylesheet",
+      "kind": "external_call"
+    },
+    {
+      "from": "dashboard",
+      "to": "chartjs_cdn",
+      "label": "loads Chart.js library to render bar charts",
+      "kind": "external_call"
+    }
+  ],
+  "summary": {
+    "feature_count": 13,
+    "connection_count": 14,
+    "headline": "A Thai government HR tool where staff record employee promotion evaluations, attach PDF documents, and view pass/fail statistics on a dashboard."
+  }
+};
+
+const LAYER_COLORS = {
+  frontend: "#3b82f6", api: "#8b5cf6", backend: "#10b981",
+  database: "#f59e0b", external: "#ec4899"
+};
+const LAYER_LABEL = {
+  frontend: "User interface", api: "Server endpoints",
+  backend: "Business logic", database: "Data storage",
+  external: "Outside services"
+};
+
+document.getElementById("project-name").textContent = DATA.project_name || "System Map";
+document.getElementById("headline").textContent = DATA.summary?.headline || "";
+
+const stackEl = document.getElementById("stack");
+(DATA.stack || []).forEach(s => {
+  const b = document.createElement("span");
+  b.className = "badge"; b.textContent = s.name;
+  stackEl.appendChild(b);
+});
+
+const legendEl = document.getElementById("legend");
+Object.entries(LAYER_LABEL).forEach(([k,v]) => {
+  const item = document.createElement("div");
+  item.className = "legend-item";
+  item.innerHTML = `<span class="legend-dot" style="background:${LAYER_COLORS[k]}"></span>${v}`;
+  legendEl.appendChild(item);
+});
+
+cytoscape.use(cytoscapeDagre);
+
+const elements = [
+  ...DATA.nodes.map(n => ({
+    data: { id: n.id, label: n.name, plain: n.plain_english,
+            layer: n.layer, files: n.files || [], external: !!n.external },
+    classes: n.layer
+  })),
+  ...DATA.edges.map(e => ({
+    data: { source: e.from, target: e.to, label: e.label || "", kind: e.kind }
+  }))
+];
+
+const cy = cytoscape({
+  container: document.getElementById("cy"),
+  elements,
+  style: [
+    { selector: "node", style: {
+      "shape": "round-rectangle",
+      "background-color": "data(color)",
+      "background-color": ele => LAYER_COLORS[ele.data("layer")] || "#64748b",
+      "label": "data(label)", "color": "#ffffff",
+      "text-valign": "center", "text-halign": "center",
+      "text-wrap": "wrap", "text-max-width": "140px",
+      "font-size": 14, "font-weight": 600,
+      "width": 180, "height": 70,
+      "border-width": 0,
+      "padding": 12,
+      "text-outline-width": 0
+    }},
+    { selector: "node:selected", style: { "border-width": 4, "border-color": "#f8fafc" }},
+    { selector: "edge", style: {
+      "width": 2,
+      "line-color": "#94a3b8",
+      "target-arrow-color": "#94a3b8",
+      "target-arrow-shape": "triangle",
+      "arrow-scale": 1.4,
+      "curve-style": "bezier",
+      "label": "data(label)",
+      "font-size": 11,
+      "font-weight": 500,
+      "color": "#0f172a",
+      "text-background-color": "#ffffff",
+      "text-background-opacity": 1,
+      "text-background-padding": 5,
+      "text-background-shape": "round-rectangle",
+      "text-border-color": "#e2e8f0",
+      "text-border-width": 1,
+      "text-border-opacity": 1,
+      "text-margin-y": -4,
+      "text-wrap": "wrap",
+      "text-max-width": "140px"
+    }},
+    { selector: "edge:hover", style: { "line-color": "#0f172a", "target-arrow-color": "#0f172a", "width": 3 }}
+  ],
+  layout: {
+    name: "dagre", rankDir: "TB", nodeSep: 80, rankSep: 140, padding: 40, edgeSep: 30
+  },
+  wheelSensitivity: 0.2
+});
+
+cy.on("tap", "node", (evt) => {
+  const n = evt.target;
+  const d = n.data();
+  document.getElementById("panel-name").textContent = d.label;
+  const chip = document.getElementById("panel-chip");
+  chip.textContent = LAYER_LABEL[d.layer] || d.layer;
+  chip.style.background = LAYER_COLORS[d.layer] || "#64748b";
+  document.getElementById("panel-explain").textContent = d.plain || "";
+
+  const inDiv = document.getElementById("panel-in"); inDiv.innerHTML = "";
+  const outDiv = document.getElementById("panel-out"); outDiv.innerHTML = "";
+  n.incomers("edge").forEach(e => {
+    const src = e.source().data("label");
+    const div = document.createElement("div");
+    div.className = "conn"; div.textContent = `${src} → ${e.data("label") || "connects here"}`;
+    inDiv.appendChild(div);
+  });
+  n.outgoers("edge").forEach(e => {
+    const tgt = e.target().data("label");
+    const div = document.createElement("div");
+    div.className = "conn"; div.textContent = `${e.data("label") || "sends to"} → ${tgt}`;
+    outDiv.appendChild(div);
+  });
+  if (!inDiv.children.length) inDiv.innerHTML = '<div class="conn" style="color:var(--muted)">Nothing comes in.</div>';
+  if (!outDiv.children.length) outDiv.innerHTML = '<div class="conn" style="color:var(--muted)">Nothing goes out.</div>';
+
+  const ul = document.getElementById("panel-files"); ul.innerHTML = "";
+  (d.files || []).forEach(f => { const li = document.createElement("li"); li.textContent = f; ul.appendChild(li); });
+  if (!ul.children.length) { const li = document.createElement("li"); li.textContent = "(no files associated)"; ul.appendChild(li); }
+
+  document.getElementById("panel").classList.add("open");
+});
+
+document.getElementById("close-btn").onclick = () => document.getElementById("panel").classList.remove("open");
+document.getElementById("fit-btn").onclick = () => cy.fit(null, 40);
+document.getElementById("reset-btn").onclick = () => { cy.fit(null, 40); cy.zoom({ level: 1 }); };
+
+const themeBtn = document.getElementById("theme-btn");
+function applyEdgeTheme(mode) {
+  const dark = mode === "dark";
+  cy.style()
+    .selector("edge").style({
+      "color": dark ? "#f1f5f9" : "#0f172a",
+      "text-background-color": dark ? "#1e293b" : "#ffffff",
+      "text-border-color": dark ? "#334155" : "#e2e8f0",
+      "line-color": dark ? "#64748b" : "#94a3b8",
+      "target-arrow-color": dark ? "#64748b" : "#94a3b8"
+    })
+    .selector("node:selected").style({
+      "border-color": dark ? "#f8fafc" : "#0f172a"
+    }).update();
+}
+themeBtn.onclick = () => {
+  const html = document.documentElement;
+  const next = html.dataset.theme === "dark" ? "light" : "dark";
+  html.dataset.theme = next;
+  themeBtn.textContent = next === "dark" ? "Light mode" : "Dark mode";
+  applyEdgeTheme(next);
+};
+
+applyEdgeTheme(document.documentElement.dataset.theme);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.getElementById("panel").classList.remove("open");
+});
+</script>
+</body>
+</html>

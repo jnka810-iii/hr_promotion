@@ -5,16 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ระบบบันทึกข้อมูลบุคคลและประเมินผลงานเพื่อเลื่อนระดับตำแหน่ง</title>
 <link rel="icon" href="data:,">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- ไลบรารีทั้งหมด self-host ใน static/vendor/ ไม่ดึงจาก CDN
+     แอปนี้แพ็กเป็น .exe ให้ผู้ใช้รันบนเครื่องที่อาจไม่มีอินเทอร์เน็ต ถ้าดึงจาก CDN แล้วโหลดไม่ได้
+     layout จะพัง, Chart.js หายทำให้ dashboard โยน ReferenceError และ toast() ที่พึ่ง bootstrap
+     ก็ตายไปด้วย คือช่องทางแจ้ง error ให้ผู้ใช้หายพร้อมกัน -->
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/sarabun.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css') }}">
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
 <style>
-:root{--pr:#1a3a6b;--pr2:#2a5298;--ac:#c8a951;--bg:#f0f3f9}
+:root{--pr:#1976D2;--pr2:#1565C0;--ac:#c8a951;--bg:#F5F5F5}
 *{box-sizing:border-box}
 body{background:var(--bg);font-family:'Sarabun','Segoe UI',sans-serif;font-size:15px;margin:0}
-.hdr{background:linear-gradient(135deg,#1a3a6b,#2a5298);color:#fff;padding:14px 24px 10px;
+.hdr{background:linear-gradient(135deg,#1565C0,#1976D2);color:#fff;padding:14px 24px 10px;
      border-bottom:4px solid var(--ac);box-shadow:0 2px 12px rgba(0,0,0,.2)}
 .hdr h4{font-size:1.05rem;margin:0;font-weight:700}
 .hdr small{font-size:.78rem;opacity:.8}
@@ -32,14 +35,14 @@ body{background:var(--bg);font-family:'Sarabun','Segoe UI',sans-serif;font-size:
 .sh{background:linear-gradient(90deg,var(--pr),var(--pr2));color:#fff;padding:8px 16px;
     border-radius:8px 8px 0 0;font-size:.9rem;font-weight:700;letter-spacing:.3px}
 .sb{background:#fff;border:1px solid #dde3ef;border-top:none;border-radius:0 0 8px 8px;
-    padding:18px 20px 14px;margin-bottom:16px}
-.ssh{background:#e8edf7;color:var(--pr);padding:6px 14px;border-radius:6px 6px 0 0;
+    padding:18px 20px 14px;margin-bottom:16px;box-shadow:0 3px 10px rgba(25,118,210,.06)}
+.ssh{background:#E3F2FD;color:var(--pr);padding:6px 14px;border-radius:6px 6px 0 0;
      font-size:.85rem;font-weight:700;border:1px solid #c8d3e8;border-bottom:none;margin-top:12px}
 .ssb{background:#fafbff;border:1px solid #c8d3e8;border-radius:0 0 6px 6px;
-     padding:14px 16px 12px;margin-bottom:8px}
+     padding:14px 16px 12px;margin-bottom:8px;box-shadow:0 2px 6px rgba(25,118,210,.05)}
 .eval-row{background:linear-gradient(135deg,#f8faff,#eef3ff);border:1px solid #c8d8f0;
-          border-radius:8px;padding:12px 14px;margin-bottom:10px;position:relative;transition:.2s}
-.eval-row:hover{box-shadow:0 3px 10px rgba(26,58,107,.1)}
+          border-radius:8px;padding:12px 14px;margin-bottom:10px;position:relative;transition:.2s;box-shadow:0 2px 8px rgba(25,118,210,.08)}
+.eval-row:hover{box-shadow:0 4px 14px rgba(25,118,210,.18)}
 .eval-num{display:inline-flex;align-items:center;justify-content:center;background:var(--pr);
           color:#fff;border-radius:50%;width:22px;height:22px;font-size:.78rem;font-weight:700;margin-right:7px}
 .upload-zone{background:linear-gradient(135deg,#f0f7ff,#e8f0fb);border:2px dashed #90b4e8;
@@ -48,7 +51,7 @@ body{background:var(--bg);font-family:'Sarabun','Segoe UI',sans-serif;font-size:
 .upload-zone.has-file{border-style:solid;border-color:#198754;background:linear-gradient(135deg,#f0fff4,#e8f7ee)}
 .upload-zone.uploading{border-color:#f59e0b;background:#fffbeb;cursor:wait}
 .file-panel{background:#fff;border:1px solid #dde3ef;border-radius:10px;
-            padding:16px 18px;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+            padding:16px 18px;margin-bottom:14px;box-shadow:0 3px 12px rgba(25,118,210,.09)}
 .file-panel .book-no{display:inline-flex;align-items:center;justify-content:center;
                      background:var(--pr);color:#fff;border-radius:50%;
                      width:28px;height:28px;font-size:.85rem;font-weight:700;margin-right:8px}
@@ -83,6 +86,8 @@ textarea.form-control{resize:vertical}
 .sc .lbl{font-size:.8rem;color:#888;margin-top:4px}
 .cc{background:#fff;border-radius:10px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,.08)}
 .toast-container{position:fixed;bottom:22px;right:22px;z-index:9999}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeIn .3s ease forwards}
 </style>
 </head>
 <body>
@@ -157,7 +162,7 @@ textarea.form-control{resize:vertical}
         <select class="form-select" id="p2_pos_level" required>
           <option value="">-- เลือก --</option>
           <option>ปฏิบัติการ</option><option>ชำนาญการ</option>
-          <option>ชำนาญการพิเศษ</option><option>เชี่ยวชาญ</option><option>ทรงคุณวุฒิ</option>
+          <option>ชำนาญการพิเศษ</option><option>เชี่ยวชาญ</option><option>ทรงคุณวุฒิ<option>อำนวยการระดับต้น<option>อำนวยการระดับสูง</option>
         </select>
       </div>
       <div class="col-6 col-md-2">
@@ -495,16 +500,27 @@ textarea.form-control{resize:vertical}
   </div>
 </template>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
 <script>
 'use strict';
-const API_BASE = '/api/records';
-const LS_KEY   = 'hr_promo_v5';
-let USE_FLASK  = false;
-let allRecords = [];
-let charts     = {};
-const COLORS   = ['#1a3a6b','#c8a951','#198754','#dc3545','#0dcaf0','#6f42c1','#fd7e14','#20c997'];
+/* ================================================================
+ * Global state & config
+ * สถาปัตยกรรมฝั่ง client: SPA ที่มี data layer 2 ชั้น (dual backend)
+ *   1) Flask + SQLite ผ่าน /api/*  — โหมดปกติ
+ *   2) LocalStorage               — โหมด offline fallback (เปิดไฟล์ html ตรง ๆ
+ *      หรือ server ล่ม) เพื่อให้กรอกข้อมูลต่อได้โดย UI ไม่ต้องเปลี่ยนอะไรเลย
+ * ตัวแปร USE_FLASK คือสวิตช์เลือกชั้น — ถูกตัดสินครั้งเดียวตอนโหลดหน้า
+ * ================================================================ */
+const API_BASE = '/api/records';   // endpoint หลักของ records ฝั่ง Flask
+const LS_KEY   = 'hr_promo_v5';    // key ใน localStorage (เปลี่ยน version เมื่อ schema เปลี่ยน)
+let USE_FLASK  = false;            // true = คุยกับ Flask, false = ใช้ LocalStorage
+let allRecords = [];               // cache รายการ record ทั้งหมดในหน่วยความจำ (refresh ผ่าน loadAll)
+let charts     = {};               // เก็บ Chart.js instance รายกราฟ ไว้ destroy ก่อนวาดใหม่ (กัน memory leak)
+const COLORS   = ['#1976D2','#c8a951','#198754','#dc3545','#0dcaf0','#6f42c1','#fd7e14','#20c997'];
 
+// SF (Save Fields): รายชื่อ id ของ input ในฟอร์มซึ่งตรงกับชื่อคอลัมน์ใน DB แบบ 1:1
+// — ทำให้ getForm/setForm วน loop เดียวจบ ไม่ต้อง map field ทีละตัว
+// (เพิ่มฟิลด์ใหม่ = เพิ่ม input ใน HTML + เพิ่มชื่อในนี้ + เพิ่มคอลัมน์ฝั่ง server)
 const SF = [
   'p1_title','p1_fname','p1_lname','p1_edu','p1_edu_major',
   'p2_pos_current','p2_pos_level','p2_empid','p2_dept','p2_sec','p2_org',
@@ -514,10 +530,18 @@ const SF = [
   'p5_doc_received','p5_work_result','p5_work_score','p5_work_eval_date',
 ];
 
-const fileCache    = {};
-const uploadedMeta = {};
-let pendingReads   = 0;
+// สถานะไฟล์แนบ — แยก 2 มิติ: "ไฟล์ที่ผู้ใช้เพิ่งเลือก" กับ "ไฟล์ที่อยู่บน server แล้ว"
+// key ของทั้งคู่คือช่องไฟล์: 1,2,3 (เล่มผลงาน) หรือ 'ann' (ไฟล์ประกาศ)
+const fileCache    = {};  // {n: {file, name, size}} — File object ที่ผู้ใช้เลือก (ไม่อ่านเนื้อไฟล์เข้า memory)
+const uploadedMeta = {};  // {n: {att_id, filename, size}} — metadata ของไฟล์ที่อัปโหลดสำเร็จบน server
 
+/**
+ * LS — data layer ฝั่ง LocalStorage (โหมด offline)
+ * เก็บทั้งชุดเป็น JSON array เดียวใต้ LS_KEY แล้วอ่าน/เขียนทั้งก้อน
+ * (ยอมรับได้เพราะปริมาณข้อมูลระดับหน่วยงานมีไม่กี่ร้อยรายการ)
+ * เลียนแบบพฤติกรรมของ REST API: มี add/upd/del/clear และใช้ _id (string สุ่ม)
+ * แทน id (integer) ของ SQLite — โค้ดส่วนอื่นจึงอ่าน (r._id || r.id) เสมอ
+ */
 const LS = {
   all(){ try{ return JSON.parse(localStorage.getItem(LS_KEY))||[]; }catch{ return []; } },
   save(a){ localStorage.setItem(LS_KEY,JSON.stringify(a)); },
@@ -528,9 +552,26 @@ const LS = {
   clear(){ localStorage.removeItem(LS_KEY); }
 };
 
+/**
+ * apiFetch — wrapper กลางของ fetch() สำหรับเรียก Flask API ทุกจุด
+ *
+ * แนวคิด: แปลง HTTP error → JavaScript exception ที่มีข้อความอ่านรู้เรื่อง
+ * โดยพยายามดึง field `error` (ภาษาไทย) ที่ server ใส่มาใน JSON ก่อน
+ * ถ้า parse ไม่ได้ค่อย fallback เป็น 'HTTP <status>' — ผู้เรียกจึงใช้
+ * try/catch จัดการทุกความล้มเหลวในที่เดียว ไม่ต้องเช็ค r.ok เอง
+ *
+ * @param {string} path        URL ปลายทาง เช่น '/api/records/3'
+ * @param {string} [method]    HTTP method (default 'GET')
+ * @param {object|FormData} [body]  object → JSON.stringify ให้อัตโนมัติ, FormData → ส่งตรง
+ * @returns {Promise<any>}     ผลลัพธ์ที่ parse จาก JSON แล้ว
+ * @throws {Error}             เมื่อ response ไม่ ok (ข้อความ = server error หรือ HTTP status)
+ */
 async function apiFetch(path, method='GET', body=null){
-  const opt = { method, headers:{'Content-Type':'application/json'} };
-  if(body) opt.body = JSON.stringify(body);
+  // FormData ต้องปล่อยให้ browser ตั้ง Content-Type เอง เพราะต้องแนบ boundary
+  // ที่สุ่มใหม่ทุก request ถ้าเซ็ต application/json ทับ server จะ parse multipart ไม่ออก
+  const isForm = body instanceof FormData;
+  const opt = { method, headers: isForm ? {} : {'Content-Type':'application/json'} };
+  if(body) opt.body = isForm ? body : JSON.stringify(body);
   const r = await fetch(path, opt);
   if(!r.ok){
     let msg = `HTTP ${r.status}`;
@@ -540,6 +581,13 @@ async function apiFetch(path, method='GET', body=null){
   return r.json();
 }
 
+/**
+ * Startup probe (IIFE รันทันทีตอนโหลดหน้า):
+ * ลองยิง GET /api/records หนึ่งครั้งเพื่อ "ตรวจว่ามี Flask backend ไหม"
+ * — สำเร็จ → โหมด Flask+SQLite, ล้มเหลว → โหมด LocalStorage (offline)
+ * แล้วอัปเดต badge มุมขวาบนให้ผู้ใช้รู้ว่ากำลังทำงานโหมดไหน
+ * จากนั้นค่อยโหลดข้อมูลรอบแรกผ่าน loadAll()
+ */
 (async()=>{
   const b = document.getElementById('mode-badge');
   try{
@@ -552,18 +600,43 @@ async function apiFetch(path, method='GET', body=null){
   await loadAll();
 })();
 
+/* ── db* — facade ของ data layer ──────────────────────────────────
+ * โค้ด UI เรียกผ่านฟังก์ชันชุดนี้เท่านั้น (ไม่แตะ apiFetch/LS ตรง ๆ)
+ * แต่ละตัว switch ตาม USE_FLASK: true → REST API, false → LocalStorage
+ * ทำให้สลับ backend ได้โดย UI ไม่ต้องรู้ว่าข้อมูลอยู่ที่ไหนจริง ๆ
+ * @param {string|number} id  — record id (SQLite integer หรือ _id string ของ LS)
+ * @param {object} d          — ข้อมูลฟอร์มจาก getForm()
+ */
 async function dbGetAll(){ return USE_FLASK ? apiFetch(API_BASE) : LS.all(); }
 async function dbAdd(d){   return USE_FLASK ? apiFetch(API_BASE,'POST',d) : LS.add(d); }
 async function dbUpd(id,d){ USE_FLASK ? await apiFetch(`${API_BASE}/${id}`,'PUT',d) : LS.upd(id,d); }
 async function dbDel(id){   USE_FLASK ? await apiFetch(`${API_BASE}/${id}`,'DELETE') : LS.del(id); }
 async function dbClear(){   USE_FLASK ? await apiFetch(API_BASE,'DELETE') : LS.clear(); }
+// โหลดข้อมูลทั้งหมดเข้า cache `allRecords` + อัปเดตตัวเลขบน tab "รายการทั้งหมด"
 async function loadAll(){ allRecords = await dbGetAll(); document.getElementById('badge-count').textContent = allRecords.length; }
 
+/* ── Utilities ── */
+// สร้าง id สุ่มสำหรับโหมด LocalStorage: เวลา (base36) + เลขสุ่ม → เรียงตามเวลาได้และชนกันยากมาก
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2); }
+// วันเวลาปัจจุบันรูปแบบไทย (ใช้เป็น _created/_updated ของ LS)
 function now(){ return new Date().toLocaleString('th-TH'); }
+// วันที่แบบ YYYYMMDD สำหรับตั้งชื่อไฟล์ export
 function dStr(){ return new Date().toISOString().slice(0,10).replace(/-/g,''); }
+// แปลงวันที่จาก <input type="date"> (YYYY-MM-DD) → รูปแบบไทย dd/mm/yyyy สำหรับแสดงผล
 function fmtDate(s){ if(!s) return ''; const [y,m,d]=s.split('-'); return `${d}/${m}/${y}`; }
+// escape อักขระพิเศษของ HTML — ต้องครอบทุกค่าที่มาจากผู้ใช้ก่อนต่อเข้า innerHTML/document.write
+// ไม่งั้นชื่อที่กรอกเป็น <img src=x onerror=...> จะกลายเป็น element จริงที่รันสคริปต์ (Stored XSS)
+function esc(s){
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
+/**
+ * toast — แสดงข้อความแจ้งเตือนลอยมุมล่างขวา (Bootstrap Toast)
+ * @param {string} msg    ข้อความที่จะแสดง
+ * @param {string} color  สี background เป็น hex (default เขียว = สำเร็จ)
+ * @returns {undefined}
+ */
 function toast(msg, color='#198754'){
   const el=document.getElementById('myToast');
   el.style.background=color;
@@ -572,12 +645,28 @@ function toast(msg, color='#198754'){
   console.error('[HR]',msg);
   new bootstrap.Toast(el,{delay:6000}).show();
 }
+/**
+ * toastError — จัดการ error ให้ผู้ใช้เห็นแบบเดียวกันทุกจุด
+ * แสดง toast สีแดง และถ้าข้อความยาวเกิน 80 ตัวอักษร (toast อ่านไม่ทัน)
+ * จะเปิด alert ซ้ำเพื่อให้อ่านเต็ม ๆ ได้
+ * @param {Error|string} err  error object หรือข้อความ
+ * @returns {undefined}
+ */
 function toastError(err){
   const msg=err?.message||String(err);
   console.error('[HR Error]',msg);
   toast(msg,'#dc3545');
   if(msg.length>80) setTimeout(()=>alert('เกิดข้อผิดพลาด:\n\n'+msg),100);
 }
+/**
+ * showTab — สลับแท็บของ SPA (กรอกข้อมูล / รายการทั้งหมด / สรุปภาพรวม)
+ * ใช้วิธีซ่อน/แสดง div ด้วย display แทนการ route จริง และ "โหลดข้อมูลใหม่
+ * ทุกครั้งที่เข้าแท็บ list/dashboard" เพื่อให้เห็นข้อมูลล่าสุดเสมอ
+ * โดยไม่ต้องมีระบบ sync state ข้ามแท็บ
+ * @param {string} id            id ของ div แท็บปลายทาง เช่น 'tab-list'
+ * @param {HTMLElement} el       ปุ่มแท็บที่ถูกคลิก (ไว้ย้าย class active)
+ * @returns {undefined}
+ */
 function showTab(id,el){
   ['tab-form','tab-list','tab-dashboard'].forEach(t=>document.getElementById(t).style.display='none');
   document.getElementById(id).style.display='';
@@ -587,6 +676,21 @@ function showTab(id,el){
   if(id==='tab-dashboard') loadAll().then(renderDashboard);
 }
 
+/* ================================================================
+ * Dynamic evaluation rows (ส่วนที่ 5.1 / 5.2)
+ * แถวรอบประเมินเพิ่ม/ลบได้ไม่จำกัด — สร้างจาก <template> ใน HTML
+ * (clone template เร็วและปลอดภัยกว่า string HTML) แล้วค่อยถูกรวบ
+ * เป็น JSON array ตอนบันทึกผ่าน getEval5xData()
+ * ================================================================ */
+
+/**
+ * addEval51 — เพิ่มแถวรอบประเมินผลงาน (ส่วน 5.1) ต่อท้าย container
+ * ใช้ทั้ง 2 ทาง: ผู้ใช้กดปุ่ม "เพิ่มรอบ" (vals=null → แถวเปล่า + animation)
+ * และตอนโหลดข้อมูลเก่ามาแก้ไข (vals มีค่า → เติมค่าเดิม ไม่เล่น animation)
+ * เลขลำดับ "รอบที่ N" คำนวณจากจำนวนแถวที่มีอยู่ + 1
+ * @param { {date:string,score:string,grade:string}|null} vals  ค่าเดิมของแถว หรือ null
+ * @returns {undefined}
+ */
 function addEval51(vals=null){
   const c=document.getElementById('eval51-container');
   const clone=document.getElementById('tmpl-eval51').content.cloneNode(true);
@@ -598,7 +702,14 @@ function addEval51(vals=null){
             row.querySelector('[name="e51_score"]').value=vals.score||'';
             row.querySelector('[name="e51_grade"]').value=vals.grade||''; }
   c.appendChild(row);
+  if(!vals) row.classList.add('fade-in');
 }
+/**
+ * addEval52 — เพิ่มแถวรอบประเมินข้อเสนอแนวคิด (ส่วน 5.2)
+ * Logic เดียวกับ addEval51 ต่างที่ template และชุดฟิลด์ (grade+remark แทน score)
+ * @param { {date:string,grade:string,remark:string}|null} vals  ค่าเดิมของแถว หรือ null
+ * @returns {undefined}
+ */
 function addEval52(vals=null){
   const c=document.getElementById('eval52-container');
   const clone=document.getElementById('tmpl-eval52').content.cloneNode(true);
@@ -610,8 +721,20 @@ function addEval52(vals=null){
             row.querySelector('[name="e52_grade"]').value=vals.grade||'';
             row.querySelector('[name="e52_remark"]').value=vals.remark||''; }
   c.appendChild(row);
+  if(!vals) row.classList.add('fade-in');
 }
+/**
+ * delEvalRow — ลบแถวประเมินที่ปุ่มถังขยะสังกัดอยู่ แล้วรันเลขลำดับใหม่
+ * @param {HTMLElement} btn  ปุ่มลบภายในแถว (หา parent ด้วย closest('.eval-row'))
+ * @returns {undefined}
+ */
 function delEvalRow(btn){ const row=btn.closest('.eval-row'); const type=row.dataset.type; row.remove(); renumEval(type); }
+/**
+ * renumEval — ไล่อัปเดตเลขลำดับทุกแถว ("รอบที่ 1..N" / "ครั้งที่ 1..N")
+ * หลังมีการลบแถวกลางรายการ เพื่อไม่ให้เลขกระโดด
+ * @param {'eval51'|'eval52'} type  ชนิดแถว (อ่านจาก data-type ของแถวที่ถูกลบ)
+ * @returns {undefined}
+ */
 function renumEval(type){
   const cid=type==='eval51'?'eval51-container':'eval52-container';
   const lbl=type==='eval51'?'รอบที่':'ครั้งที่';
@@ -620,6 +743,11 @@ function renumEval(type){
     r.querySelector('.row-lbl').textContent=`${lbl} ${i+1}`;
   });
 }
+/**
+ * getEval51Data — รวบค่าจากทุกแถว 5.1 ใน DOM → array of object
+ * (ลำดับใน array = ลำดับแถวบนจอ)
+ * @returns {Array<{date:string,score:string,grade:string}>}
+ */
 function getEval51Data(){
   return Array.from(document.querySelectorAll('#eval51-container .eval-row')).map(r=>({
     date:r.querySelector('[name="e51_date"]').value,
@@ -627,6 +755,10 @@ function getEval51Data(){
     grade:r.querySelector('[name="e51_grade"]').value,
   }));
 }
+/**
+ * getEval52Data — รวบค่าจากทุกแถว 5.2 ใน DOM → array of object
+ * @returns {Array<{date:string,grade:string,remark:string}>}
+ */
 function getEval52Data(){
   return Array.from(document.querySelectorAll('#eval52-container .eval-row')).map(r=>({
     date:r.querySelector('[name="e52_date"]').value,
@@ -635,6 +767,25 @@ function getEval52Data(){
   }));
 }
 
+/* ================================================================
+ * File upload (ส่วนที่ 6: เล่มผลงาน 1-3 และส่วนที่ 3: ไฟล์ประกาศ 'ann')
+ *
+ * Flow การอัปโหลด 2 จังหวะ (เพราะไฟล์อาจถูกเลือกก่อนที่ record จะมี id):
+ *   เลือกไฟล์ → เก็บ File object ไว้ใน fileCache (ไม่อ่านเนื้อไฟล์เข้า memory)
+ *     ├─ ถ้ากำลัง "แก้ไข" record เดิม (มี rec-id) → อัปโหลดขึ้น server ทันที
+ *     └─ ถ้าเป็น record ใหม่ (ยังไม่มี id)       → ค้างสถานะ "รอบันทึก"
+ *        แล้วให้ submit handler อัปโหลดตามหลังจาก INSERT สำเร็จและได้ id มา
+ *
+ * หมายเหตุ: ฟังก์ชันชุด *Ann เป็นเวอร์ชันคู่ขนานของช่องไฟล์ประกาศ
+ * (element id ลงท้าย -ann และ book_no='ann') — logic เหมือนชุดเล่ม 1-3 ทุกจุด
+ * ================================================================ */
+
+/**
+ * buildFilePanels — สร้าง UI ช่องอัปโหลดเล่มผลงานทั้ง 3 เล่มตอนโหลดหน้า
+ * ใช้ template string วน loop แทนเขียน HTML ซ้ำ 3 ชุด — element id ทุกตัว
+ * ฝังเลขเล่ม n ไว้ (เช่น uzone-1, prog-bar-2) ให้ฟังก์ชันอื่นอ้างถึงตาม n ได้
+ * @returns {undefined}
+ */
 function buildFilePanels(){
   const c=document.getElementById('file-container'); c.innerHTML='';
   for(let n=1;n<=3;n++){
@@ -687,10 +838,24 @@ function buildFilePanels(){
   }
 }
 
+/**
+ * setUploadStatus — อัปเดต badge สถานะไฟล์ของเล่มที่ n
+ * @param {number|string} n   เลขเล่ม (1-3)
+ * @param {string} text       ข้อความสถานะ เช่น 'กำลังอัปโหลด...'
+ * @param {string} [cls]      ชื่อสี Bootstrap: secondary/warning/success/danger
+ * @returns {undefined}
+ */
 function setUploadStatus(n,text,cls='secondary'){
   const el=document.getElementById('upload-status-'+n);
   el.textContent=text; el.className=`ms-3 badge bg-${cls}`;
 }
+/**
+ * showFileUI — แสดงชื่อ+ขนาดไฟล์ที่เลือกในการ์ดข้อมูลไฟล์ของเล่มที่ n
+ * @param {number|string} n  เลขเล่ม
+ * @param {string} name      ชื่อไฟล์ต้นฉบับ
+ * @param {number} size      ขนาดไฟล์ (bytes) — แสดงผลเป็น KB
+ * @returns {undefined}
+ */
 function showFileUI(n,name,size){
   const zone=document.getElementById('uzone-'+n); zone.classList.add('has-file');
   document.getElementById('uzone-lbl-'+n).textContent=name;
@@ -698,63 +863,129 @@ function showFileUI(n,name,size){
   document.getElementById('fsize-'+n).textContent=`${(size/1024).toFixed(1)} KB`;
   document.getElementById('file-info-'+n).style.display='';
 }
+/**
+ * showProgress — คุม progress bar ของเล่มที่ n
+ * ค่าที่ใช้เป็นแบบ "milestone" (50/100) ไม่ใช่ % จริง เพราะ fetch ไม่มี event
+ * บอกความคืบหน้าของ request body — พอถึง 100 จะซ่อน bar
+ * @param {number|string} n  เลขเล่ม
+ * @param {number} pct       เปอร์เซ็นต์ (0-100)
+ * @returns {undefined}
+ */
 function showProgress(n,pct){
   const wrap=document.getElementById('prog-wrap-'+n);
   const bar=document.getElementById('prog-bar-'+n);
   wrap.style.display=pct<100?'':'none'; bar.style.width=pct+'%';
 }
 
+/**
+ * handleFileSelect — จุดเข้าเมื่อผู้ใช้เลือกไฟล์ (คลิกหรือ drop)
+ * ตรวจ 2 ด่าน: นามสกุลต้องเป็น .pdf และขนาดไม่เกิน 100 MB ซึ่งตรงกับเพดาน
+ * MAX_CONTENT_LENGTH ฝั่ง server (multipart มี overhead แค่ไม่กี่ร้อยไบต์)
+ * การตรวจตรงนี้เป็นแค่การแจ้งผู้ใช้เร็ว ๆ ของจริงต้องตรวจซ้ำฝั่ง server เสมอ
+ * @param {File} file        ไฟล์จาก input หรือ drag-and-drop
+ * @param {number} n         เลขเล่ม (1-3)
+ * @returns {undefined}
+ */
 function handleFileSelect(file,n){
   if(!file) return;
   if(!file.name.toLowerCase().endsWith('.pdf')) return toast('รองรับเฉพาะไฟล์ PDF เท่านั้น','#dc3545');
   if(file.size>100*1024*1024) return toast('ไฟล์ใหญ่เกิน 100 MB','#dc3545');
-  _readAndCache(file,n);
+  _cacheFile(file,n);
 }
+/**
+ * handleDrop — รองรับการลากไฟล์มาวางบน upload zone (รับเฉพาะไฟล์แรก)
+ * @param {DragEvent} ev  ต้อง preventDefault ไม่งั้นเบราว์เซอร์จะเปิดไฟล์แทน
+ * @param {number} n      เลขเล่ม
+ * @returns {undefined}
+ */
 function handleDrop(ev,n){ ev.preventDefault(); const file=ev.dataTransfer.files[0]; if(file) handleFileSelect(file,n); }
 
-function _readAndCache(file,n){
-  const reader=new FileReader();
+/**
+ * _cacheFile — เก็บ File object ที่ผู้ใช้เลือกไว้ใน fileCache แล้วอัปโหลดถ้าทำได้
+ *
+ * เก็บตัว File ตรง ๆ ไม่อ่านเนื้อไฟล์เข้า memory เลย ตอนส่งขึ้น server ใช้ multipart
+ * แล้วให้ browser stream ไฟล์จากดิสก์ให้ (ดู _uploadToFlask) — เวอร์ชันก่อนหน้า
+ * อ่านเป็น base64 ด้วย FileReader ทำให้ไฟล์ 100 MB กิน RAM หลายร้อย MB พร้อมกัน
+ * ทั้งฝั่ง browser และฝั่ง server และเป็นเหตุให้ต้องตั้ง MAX_CONTENT_LENGTH สูงถึง 200 MB
+ *
+ * ถ้าฟอร์มกำลังแก้ไข record เดิม (มี rec-id และเป็นโหมด Flask) → อัปโหลดทันที
+ * ไม่งั้นค้างสถานะ "รอบันทึกข้อมูล" เพราะยังไม่มี record id ให้ผูกไฟล์
+ * @param {File} file        ไฟล์ที่ผ่านการตรวจแล้ว
+ * @param {number|string} n  เลขเล่ม
+ * @returns {Promise<void>}
+ */
+async function _cacheFile(file,n){
+  fileCache[n]={file,name:file.name,size:file.size};
+  showFileUI(n,file.name,file.size);
+  const rid=document.getElementById('rec-id').value;
+  if(!(rid&&USE_FLASK)){
+    showProgress(n,100); setUploadStatus(n,'⏳ รอบันทึกข้อมูล','warning'); return;
+  }
   const zone=document.getElementById('uzone-'+n);
   zone.classList.add('uploading');
-  setUploadStatus(n,'กำลังอ่านไฟล์...','warning');
-  showProgress(n,30);
-  pendingReads++;
-
-  reader.onload=async(ev)=>{
-    pendingReads=Math.max(0,pendingReads-1);
-    const base64=ev.target.result;
-    fileCache[n]={name:file.name,base64,size:file.size};
-    showFileUI(n,file.name,file.size);
-    zone.classList.remove('uploading');
-    const rid=document.getElementById('rec-id').value;
-    if(rid&&USE_FLASK){ await _uploadToFlask(n,rid); }
-    else{ showProgress(n,100); setUploadStatus(n,'⏳ รอบันทึกข้อมูล','warning'); }
-  };
-  reader.onerror=()=>{
-    pendingReads=Math.max(0,pendingReads-1);
-    zone.classList.remove('uploading');
-    setUploadStatus(n,'อ่านไฟล์ล้มเหลว','danger');
-    showProgress(n,0);
-    toast(`อ่านไฟล์เล่มที่ ${n} ล้มเหลว กรุณาลองใหม่`,'#dc3545');
-  };
-  reader.readAsDataURL(file);
+  try{ await _uploadToFlask(n,rid); }
+  finally{ zone.classList.remove('uploading'); }
 }
 
+/**
+ * _openLocal — เปิดหรือดาวน์โหลดไฟล์ที่ "ยังไม่ได้อัปโหลด" จาก File object ใน fileCache
+ * ใช้ blob URL แทน data URL เพราะไม่ต้อง encode เนื้อไฟล์เป็น string
+ * revoke ทิ้งหลังจากนั้นเพื่อไม่ให้ browser ถือ reference ของไฟล์ค้างทั้ง session
+ * (หน่วง 1 นาทีเพราะแท็บที่เพิ่งเปิดยังต้องใช้ URL นี้โหลด PDF อยู่)
+ * @param {object} entry        ค่าใน fileCache ({file, name, size})
+ * @param {boolean} asDownload  true = บันทึกลงเครื่อง, false = เปิดดูในแท็บใหม่
+ * @returns {undefined}
+ */
+function _openLocal(entry,asDownload){
+  const url=URL.createObjectURL(entry.file);
+  if(asDownload){
+    const a=document.createElement('a'); a.href=url; a.download=entry.name; a.click();
+  } else {
+    window.open(url,'_blank');
+  }
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+
+/**
+ * _uploadToFlask — ส่งไฟล์จาก fileCache[n] ขึ้น server ของ record ที่ระบุ
+ * ส่งเป็น multipart/form-data โดยแนบ File object ตรง ๆ browser จะ stream ให้
+ * ไม่ต้องโหลดทั้งไฟล์เข้า memory ก่อน
+ * สำเร็จแล้วบันทึก att_id ลง uploadedMeta[n] (ใช้เป็นตัวบ่งชี้ว่า "อยู่บน
+ * server แล้ว" — กันอัปโหลดซ้ำตอน submit) และคืน boolean แทนการ throw
+ * เพื่อให้ผู้เรียกรวบรวมรายการเล่มที่ล้มเหลวไปแจ้งผู้ใช้ทีเดียว
+ * @param {number|string} n        เลขเล่ม (1-3)
+ * @param {string|number} rid      id ของ record เจ้าของไฟล์
+ * @returns {Promise<boolean>}     true = สำเร็จ/ไม่มีไฟล์ให้อัป, false = ล้มเหลว
+ */
 async function _uploadToFlask(n,rid){
   const fd=fileCache[n]; if(!fd) return true;
   setUploadStatus(n,'กำลังอัปโหลด...','warning'); showProgress(n,50);
   try{
-    const res=await apiFetch(`/api/records/${rid}/attachments`,'POST',{book_no:n,filename:fd.name,data:fd.base64});
+    const form=new FormData();
+    form.append('book_no',String(n));
+    form.append('file',fd.file,fd.name);
+    const res=await apiFetch(`/api/records/${rid}/attachments`,'POST',form);
     uploadedMeta[n]={att_id:res.id,filename:res.filename,size:res.size};
     showProgress(n,100);
     setUploadStatus(n,`✓ อัปโหลดแล้ว (${(res.size/1024).toFixed(1)} KB)`,'success');
     return true;
   }catch(err){
     showProgress(n,0); setUploadStatus(n,'✗ อัปโหลดล้มเหลว','danger');
+    // server ตรวจเนื้อหาไฟล์เองด้วย (ไม่ใช่ PDF จริง / เกิน 100 MB / ไม่พบ record)
+    // ด่านฝั่งนี้ดูแค่นามสกุลกับขนาด ไฟล์ที่ตั้งชื่อ .pdf แต่ข้างในไม่ใช่จะผ่านมาถึง server
+    // จึงต้องโชว์เหตุผลจาก server ไม่ใช่แค่ 'ล้มเหลว' ลอย ๆ ที่ผู้ใช้เดาต่อไม่ได้
+    toast(`เล่ม ${n}: ${err.message}`,'#dc3545');
     console.error(`[Upload เล่ม ${n}]`,err.message); return false;
   }
 }
 
+/**
+ * clearFile — ลบไฟล์ของเล่มที่ n ออกทั้งระบบ
+ * ลำดับ: ลบบน server (ถ้าเคยอัปโหลดแล้ว — พลาดก็กลืน error เพราะเป้าหมาย
+ * คือ "ให้ไม่มีไฟล์") → ล้าง cache ฝั่ง client → reset UI กลับสถานะว่าง
+ * @param {number|string} n  เลขเล่ม
+ * @returns {Promise<void>}
+ */
 async function clearFile(n){
   if(USE_FLASK&&uploadedMeta[n]?.att_id){
     try{ await apiFetch(`/api/attachments/${uploadedMeta[n].att_id}`,'DELETE'); }catch{}
@@ -770,49 +1001,56 @@ async function clearFile(n){
   toast(`ลบไฟล์เล่มที่ ${n} เรียบร้อย`,'#6c757d');
 }
 
+/**
+ * downloadFile — ดาวน์โหลด PDF เล่มที่ n
+ * ลำดับความสำคัญของแหล่งไฟล์: server ก่อน (เปิด URL download) → ถ้ายังไม่ได้
+ * อัปโหลดใช้ File ใน fileCache สร้าง blob URL ชั่วคราวแทน → ไม่มีเลยแจ้งเตือน
+ * @param {number|string} n  เลขเล่ม
+ * @returns {Promise<void>}
+ */
 async function downloadFile(n){
   if(USE_FLASK&&uploadedMeta[n]?.att_id){ window.open(`/api/attachments/${uploadedMeta[n].att_id}`,'_blank'); return; }
-  if(fileCache[n]?.base64){ const a=document.createElement('a'); a.href=fileCache[n].base64; a.download=fileCache[n].name; a.click(); return; }
+  if(fileCache[n]?.file){ _openLocal(fileCache[n],true); return; }
   toast('ยังไม่มีไฟล์เล่มที่ '+n,'#dc3545');
 }
+/**
+ * previewFile — เปิดดู PDF เล่มที่ n ในแท็บใหม่ (ใช้ endpoint /preview
+ * ซึ่ง serve แบบ inline) — fallback logic เดียวกับ downloadFile
+ * @param {number|string} n  เลขเล่ม
+ * @returns {Promise<void>}
+ */
 async function previewFile(n){
   if(USE_FLASK&&uploadedMeta[n]?.att_id){ window.open(`/api/attachments/${uploadedMeta[n].att_id}/preview`,'_blank'); return; }
-  if(fileCache[n]?.base64){ window.open(fileCache[n].base64,'_blank'); return; }
+  if(fileCache[n]?.file){ _openLocal(fileCache[n],false); return; }
   toast('ยังไม่มีไฟล์เล่มที่ '+n,'#dc3545');
 }
 
+/* ── ชุดฟังก์ชันไฟล์ประกาศ (*Ann) ─────────────────────────────────
+ * mirror ของชุดเล่ม 1-3 ทุกฟังก์ชัน (handleFileSelect → handleFileSelectAnn,
+ * _uploadToFlask → _uploadToFlaskAnn ฯลฯ) ต่างกันเพียง:
+ * - element id ใช้ suffix '-ann' แทนเลขเล่ม
+ * - book_no ที่ส่งขึ้น server เป็น string 'ann'
+ * ดูคำอธิบาย logic ละเอียดที่ฟังก์ชันต้นแบบชุดเล่ม 1-3 ด้านบน
+ * ──────────────────────────────────────────────────────────────── */
 function handleFileSelectAnn(file){
   if(!file) return;
   if(!file.name.toLowerCase().endsWith('.pdf')) return toast('รองรับเฉพาะไฟล์ PDF เท่านั้น','#dc3545');
   if(file.size>100*1024*1024) return toast('ไฟล์ใหญ่เกิน 100 MB','#dc3545');
-  _readAndCacheAnn(file);
+  _cacheFileAnn(file);
 }
 function handleDropAnn(ev){ ev.preventDefault(); const file=ev.dataTransfer.files[0]; if(file) handleFileSelectAnn(file); }
 
-function _readAndCacheAnn(file){
-  const reader=new FileReader();
+async function _cacheFileAnn(file){
+  fileCache['ann']={file,name:file.name,size:file.size};
+  showFileUIAnn(file.name,file.size);
+  const rid=document.getElementById('rec-id').value;
+  if(!(rid&&USE_FLASK)){
+    showProgressAnn(100); setUploadStatusAnn('⏳ รอบันทึกข้อมูล','warning'); return;
+  }
   const zone=document.getElementById('uzone-ann');
   zone.classList.add('uploading');
-  setUploadStatusAnn('กำลังอ่านไฟล์...','warning');
-  showProgressAnn(30);
-  pendingReads++;
-  reader.onload=async(ev)=>{
-    pendingReads=Math.max(0,pendingReads-1);
-    fileCache['ann']={name:file.name,base64:ev.target.result,size:file.size};
-    showFileUIAnn(file.name,file.size);
-    zone.classList.remove('uploading');
-    const rid=document.getElementById('rec-id').value;
-    if(rid&&USE_FLASK){ await _uploadToFlaskAnn(rid); }
-    else{ showProgressAnn(100); setUploadStatusAnn('⏳ รอบันทึกข้อมูล','warning'); }
-  };
-  reader.onerror=()=>{
-    pendingReads=Math.max(0,pendingReads-1);
-    zone.classList.remove('uploading');
-    setUploadStatusAnn('อ่านไฟล์ล้มเหลว','danger');
-    showProgressAnn(0);
-    toast('อ่านไฟล์ประกาศล้มเหลว กรุณาลองใหม่','#dc3545');
-  };
-  reader.readAsDataURL(file);
+  try{ await _uploadToFlaskAnn(rid); }
+  finally{ zone.classList.remove('uploading'); }
 }
 function setUploadStatusAnn(text,cls='secondary'){
   const el=document.getElementById('upload-status-ann');
@@ -834,13 +1072,17 @@ async function _uploadToFlaskAnn(rid){
   const fd=fileCache['ann']; if(!fd) return true;
   setUploadStatusAnn('กำลังอัปโหลด...','warning'); showProgressAnn(50);
   try{
-    const res=await apiFetch(`/api/records/${rid}/attachments`,'POST',{book_no:'ann',filename:fd.name,data:fd.base64});
+    const form=new FormData();
+    form.append('book_no','ann');
+    form.append('file',fd.file,fd.name);
+    const res=await apiFetch(`/api/records/${rid}/attachments`,'POST',form);
     uploadedMeta['ann']={att_id:res.id,filename:res.filename,size:res.size};
     showProgressAnn(100);
     setUploadStatusAnn(`✓ อัปโหลดแล้ว (${(res.size/1024).toFixed(1)} KB)`,'success');
     return true;
   }catch(err){
     showProgressAnn(0); setUploadStatusAnn('✗ อัปโหลดล้มเหลว','danger');
+    toast(`ประกาศ: ${err.message}`,'#dc3545');   // เหตุผลจาก server (ดู _uploadToFlask)
     console.error('[Upload ประกาศ]',err.message); return false;
   }
 }
@@ -859,15 +1101,23 @@ async function clearFileAnn(){
 }
 async function downloadFileAnn(){
   if(USE_FLASK&&uploadedMeta['ann']?.att_id){ window.open(`/api/attachments/${uploadedMeta['ann'].att_id}`,'_blank'); return; }
-  if(fileCache['ann']?.base64){ const a=document.createElement('a'); a.href=fileCache['ann'].base64; a.download=fileCache['ann'].name; a.click(); return; }
+  if(fileCache['ann']?.file){ _openLocal(fileCache['ann'],true); return; }
   toast('ยังไม่มีไฟล์ประกาศ','#dc3545');
 }
 async function previewFileAnn(){
   if(USE_FLASK&&uploadedMeta['ann']?.att_id){ window.open(`/api/attachments/${uploadedMeta['ann'].att_id}/preview`,'_blank'); return; }
-  if(fileCache['ann']?.base64){ window.open(fileCache['ann'].base64,'_blank'); return; }
+  if(fileCache['ann']?.file){ _openLocal(fileCache['ann'],false); return; }
   toast('ยังไม่มีไฟล์ประกาศ','#dc3545');
 }
 
+/**
+ * loadAttachments — โหลด metadata ไฟล์แนบของ record มาแสดงตอนกด "แก้ไข"
+ * ล้าง uploadedMeta เดิมทั้งหมดก่อน (กันข้อมูลของ record ก่อนหน้าปนมา)
+ * แล้ว map แต่ละไฟล์เข้า UI ตาม book_no: 'ann' → ช่องประกาศ, ตัวเลข → ช่องเล่มนั้น
+ * ทำงานเฉพาะโหมด Flask (โหมด LocalStorage ไม่มีระบบไฟล์แนบบน server)
+ * @param {string|number} rid  id ของ record ที่กำลังแก้ไข
+ * @returns {Promise<void>} (side effect: เติม uploadedMeta + อัปเดต UI)
+ */
 async function loadAttachments(rid){
   if(!USE_FLASK||!rid) return;
   Object.keys(uploadedMeta).forEach(k=>delete uploadedMeta[k]);
@@ -886,6 +1136,20 @@ async function loadAttachments(rid){
   }catch(e){ console.warn('loadAttachments:',e.message); }
 }
 
+/**
+ * printReport — สร้างรายงานสรุปสำหรับพิมพ์/บันทึกเป็น PDF
+ *
+ * แนวคิด: เปิดหน้าต่างใหม่แล้วเขียน HTML รายงานทั้งหน้า (มี CSS ของตัวเอง
+ * รวม @media print ที่ซ่อนปุ่ม) จากข้อมูล "ในฟอร์มปัจจุบัน" (getForm) —
+ * ไม่ใช่จาก DB — ผู้ใช้จึง preview รายงานได้ก่อนบันทึก แล้วสั่งพิมพ์ผ่าน
+ * dialog ของเบราว์เซอร์ (window.print) ซึ่งเลือก "Save as PDF" ได้ในตัว
+ *
+ * คะแนนเฉลี่ย: เฉลี่ยเลขคณิตจากคะแนน 5.1 เฉพาะค่าที่ > 0
+ * (กรองศูนย์ทิ้งเพราะแถวที่ยังไม่กรอกคะแนน parse ได้ 0 — ไม่ใช่คะแนนจริง)
+ *
+ * @param {number} bookNo  เลขเล่มที่จะแสดงบนหัวรายงาน
+ * @returns {undefined}
+ */
 function printReport(bookNo){
   const d=getForm();
   const ev51=JSON.parse(d.eval51_rows||'[]');
@@ -895,56 +1159,66 @@ function printReport(bookNo){
   const win=window.open('','_blank');
   win.document.write(`<!DOCTYPE html><html lang="th"><head>
 <meta charset="UTF-8">
-<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+<link href="${location.origin}/static/vendor/sarabun.css" rel="stylesheet">
 <title>รายงานผลการประเมิน เล่มที่ ${bookNo}</title>
 <style>body{font-family:'Sarabun',sans-serif;font-size:13px;padding:28px;color:#222}
-h2{text-align:center;color:#1a3a6b;margin-bottom:4px}h3{color:#2a5298;border-bottom:2px solid #c8a951;padding-bottom:3px;margin:14px 0 8px}
-table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{border:1px solid #aaa;padding:5px 8px;font-size:12px}th{background:#1a3a6b;color:#fff}
+h2{text-align:center;color:#1976D2;margin-bottom:4px}h3{color:#1565C0;border-bottom:2px solid #c8a951;padding-bottom:3px;margin:14px 0 8px}
+table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{border:1px solid #aaa;padding:5px 8px;font-size:12px}th{background:#1976D2;color:#fff}
 .row2{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px}.cell{flex:1;min-width:120px}.lbl{font-weight:700;color:#1a3a6b;font-size:11px;margin-bottom:2px}
 .val{border-bottom:1px solid #bbb;padding:2px 0;min-height:18px}@media print{button{display:none}}</style></head><body>
 <h2>รายงานผลการประเมินผลงาน เล่มที่ ${bookNo}</h2>
 <p style="text-align:center;color:#666">พิมพ์วันที่: ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</p>
 <h3>ส่วนที่ 1 : ข้อมูลส่วนตัว</h3>
 <div class="row2">
-  <div class="cell"><div class="lbl">ชื่อ-นามสกุล</div><div class="val">${d.p1_title||''}${d.p1_fname||''} ${d.p1_lname||''}</div></div>
-  <div class="cell"><div class="lbl">วุฒิการศึกษา</div><div class="val">${d.p1_edu||'-'}</div></div>
-  <div class="cell"><div class="lbl">สาขาวิชา</div><div class="val">${d.p1_edu_major||'-'}</div></div>
+  <div class="cell"><div class="lbl">ชื่อ-นามสกุล</div><div class="val">${esc(d.p1_title)}${esc(d.p1_fname)} ${esc(d.p1_lname)}</div></div>
+  <div class="cell"><div class="lbl">วุฒิการศึกษา</div><div class="val">${esc(d.p1_edu)||'-'}</div></div>
+  <div class="cell"><div class="lbl">สาขาวิชา</div><div class="val">${esc(d.p1_edu_major)||'-'}</div></div>
 </div>
 <h3>ส่วนที่ 2 : ตำแหน่งปัจจุบัน</h3>
 <div class="row2">
-  <div class="cell"><div class="lbl">ตำแหน่ง</div><div class="val">${d.p2_pos_current||'-'}</div></div>
-  <div class="cell"><div class="lbl">ระดับ</div><div class="val">${d.p2_pos_level||'-'}</div></div>
-  <div class="cell"><div class="lbl">เลขที่</div><div class="val">${d.p2_empid||'-'}</div></div>
-  <div class="cell"><div class="lbl">กลุ่มงาน</div><div class="val">${d.p2_dept||'-'}</div></div>
-  <div class="cell"><div class="lbl">สำนัก/กอง</div><div class="val">${d.p2_sec||'-'}</div></div>
+  <div class="cell"><div class="lbl">ตำแหน่ง</div><div class="val">${esc(d.p2_pos_current)||'-'}</div></div>
+  <div class="cell"><div class="lbl">ระดับ</div><div class="val">${esc(d.p2_pos_level)||'-'}</div></div>
+  <div class="cell"><div class="lbl">เลขที่</div><div class="val">${esc(d.p2_empid)||'-'}</div></div>
+  <div class="cell"><div class="lbl">กลุ่มงาน</div><div class="val">${esc(d.p2_dept)||'-'}</div></div>
+  <div class="cell"><div class="lbl">สำนัก/กอง</div><div class="val">${esc(d.p2_sec)||'-'}</div></div>
 </div>
 <h3>ส่วนที่ 4 : ผลงานที่เสนอ</h3>
 <table><thead><tr><th>#</th><th>ชื่อผลงาน</th><th>ปี พ.ศ.</th></tr></thead><tbody>
-<tr><td>1</td><td>${d.p4_work1_title||'-'}</td><td>${d.p4_work1_year||'-'}</td></tr>
-<tr><td>2</td><td>${d.p4_work2_title||'-'}</td><td>${d.p4_work2_year||'-'}</td></tr>
-<tr><td>3</td><td>${d.p4_work3_title||'-'}</td><td>${d.p4_work3_year||'-'}</td></tr>
+<tr><td>1</td><td>${esc(d.p4_work1_title)||'-'}</td><td>${esc(d.p4_work1_year)||'-'}</td></tr>
+<tr><td>2</td><td>${esc(d.p4_work2_title)||'-'}</td><td>${esc(d.p4_work2_year)||'-'}</td></tr>
+<tr><td>3</td><td>${esc(d.p4_work3_title)||'-'}</td><td>${esc(d.p4_work3_year)||'-'}</td></tr>
 </tbody></table>
-<p><strong>ข้อเสนอแนวคิด:</strong> ${d.p4_concept_title||'-'}</p>
+<p><strong>ข้อเสนอแนวคิด:</strong> ${esc(d.p4_concept_title)||'-'}</p>
 <h3>ส่วนที่ 5 : ผลการประเมิน</h3>
 <div class="row2">
-  <div class="cell"><div class="lbl">ผลการพิจารณา</div><div class="val">${d.p5_work_result||'-'}</div></div>
-  <div class="cell"><div class="lbl">คะแนนผลงาน</div><div class="val">${d.p5_work_score||'-'}</div></div>
+  <div class="cell"><div class="lbl">ผลการพิจารณา</div><div class="val">${esc(d.p5_work_result)||'-'}</div></div>
+  <div class="cell"><div class="lbl">คะแนนผลงาน</div><div class="val">${esc(d.p5_work_score)||'-'}</div></div>
   <div class="cell"><div class="lbl">คะแนนเฉลี่ย 5.1</div><div class="val">${avg}%</div></div>
 </div>
 <h3>ส่วนที่ 5.1 : คะแนนรอบประเมินผลงาน</h3>
 <table><thead><tr><th>รอบที่</th><th>วันที่</th><th>คะแนน (%)</th><th>ระดับผล</th></tr></thead>
-<tbody>${ev51.map((r,i)=>`<tr><td>${i+1}</td><td>${fmtDate(r.date)||'-'}</td><td>${r.score||'-'}</td><td>${r.grade||'-'}</td></tr>`).join('')||'<tr><td colspan="4" style="text-align:center">-</td></tr>'}</tbody></table>
+<tbody>${ev51.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(fmtDate(r.date))||'-'}</td><td>${esc(r.score)||'-'}</td><td>${esc(r.grade)||'-'}</td></tr>`).join('')||'<tr><td colspan="4" style="text-align:center">-</td></tr>'}</tbody></table>
 <h3>ส่วนที่ 5.2 : คะแนนข้อเสนอแนวคิด</h3>
 <table><thead><tr><th>ครั้งที่</th><th>วันที่</th><th>ระดับ</th><th>ความเห็นกรรมการ</th></tr></thead>
-<tbody>${ev52.map((r,i)=>`<tr><td>${i+1}</td><td>${fmtDate(r.date)||'-'}</td><td>${r.grade||'-'}</td><td>${r.remark||'-'}</td></tr>`).join('')||'<tr><td colspan="4" style="text-align:center">-</td></tr>'}</tbody></table>
+<tbody>${ev52.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(fmtDate(r.date))||'-'}</td><td>${esc(r.grade)||'-'}</td><td>${esc(r.remark)||'-'}</td></tr>`).join('')||'<tr><td colspan="4" style="text-align:center">-</td></tr>'}</tbody></table>
 <div style="text-align:center;margin-top:20px">
-  <button onclick="window.print()" style="padding:9px 28px;background:#1a3a6b;color:#fff;border:none;border-radius:7px;cursor:pointer;font-family:Sarabun,sans-serif;font-size:14px;font-weight:700">
+  <button onclick="window.print()" style="padding:9px 28px;background:#1976D2;color:#fff;border:none;border-radius:7px;cursor:pointer;font-family:Sarabun,sans-serif;font-size:14px;font-weight:700">
     🖨️ พิมพ์ / บันทึก PDF
   </button>
 </div></body></html>`);
   win.document.close();
 }
 
+/* ================================================================
+ * Form ↔ data mapping
+ * ================================================================ */
+
+/**
+ * getForm — อ่านค่าทุก input ในฟอร์มออกมาเป็น object เดียว
+ * วนตามรายชื่อ SF (id ตรงกับชื่อคอลัมน์ DB) + แนบแถวประเมิน 5.1/5.2
+ * เป็น JSON string ตาม format ที่ DB เก็บ
+ * @returns {object} payload พร้อมส่งเข้า dbAdd/dbUpd ได้ทันที
+ */
 function getForm(){
   const d={};
   SF.forEach(id=>{ d[id]=(document.getElementById(id)||{value:''}).value; });
@@ -952,6 +1226,14 @@ function getForm(){
   d.eval52_rows=JSON.stringify(getEval52Data());
   return d;
 }
+/**
+ * setForm — เติมข้อมูล record ลงฟอร์ม (ขั้นตอนแรกของการ "แก้ไข")
+ * ส่วนแถวประเมิน: ล้าง container แล้วสร้างแถวใหม่จากข้อมูลเดิมทีละแถว
+ * (parse ใน try/catch — JSON เสียให้ถือว่าไม่มีข้อมูล ไม่ทำหน้าพัง)
+ * ถ้าไม่มีข้อมูลเลยให้สร้างแถวเปล่า 1 แถวไว้ให้กรอกต่อ
+ * @param {object} r  record จาก DB/LocalStorage
+ * @returns {undefined}
+ */
 function setForm(r){
   SF.forEach(id=>{ const el=document.getElementById(id); if(el) el.value=r[id]||''; });
   document.getElementById('eval51-container').innerHTML='';
@@ -961,6 +1243,13 @@ function setForm(r){
   if(!ev51.length) addEval51(); else ev51.forEach(v=>addEval51(v));
   if(!ev52.length) addEval52(); else ev52.forEach(v=>addEval52(v));
 }
+/**
+ * clearForm — reset ฟอร์มกลับสถานะเริ่มต้นทั้งหมด
+ * ล้างทุก input + ล้าง rec-id (กลับสู่โหมด "สร้างใหม่") + สร้างแถวประเมิน
+ * เปล่า 3 แถวตามค่าเริ่มต้น + ล้างสถานะไฟล์ทุกช่อง (เล่ม 1-3 และประกาศ)
+ * ถูกเรียกทั้งตอนโหลดหน้า หลังบันทึกสำเร็จ และเมื่อกดปุ่ม "ล้างฟอร์ม"
+ * @returns {undefined}
+ */
 function clearForm(){
   SF.forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   document.getElementById('rec-id').value='';
@@ -984,10 +1273,23 @@ function clearForm(){
   setUploadStatusAnn('ยังไม่มีไฟล์','secondary');
 }
 
+/**
+ * Submit handler — จุดศูนย์กลางของการบันทึกข้อมูล (ทั้งสร้างใหม่และแก้ไข)
+ *
+ * ลำดับการทำงาน:
+ * 1. validate ฝั่ง client แบบสะสมทุก error แล้วแจ้งครั้งเดียว (UX ดีกว่า
+ *    แจ้งทีละฟิลด์) — เข้มกว่า validation ฝั่ง server ซึ่งบังคับแค่ 4 ฟิลด์
+ * 2. ตัดสินโหมดจาก rec-id: มีค่า = UPDATE record เดิม, ว่าง = INSERT ใหม่
+ *    (กรณี INSERT ต้องรอ id ที่ server ตอบกลับก่อน จึงจะอัปโหลดไฟล์ได้)
+ * 3. อัปโหลดไฟล์ที่ค้างใน fileCache: เฉพาะตัวที่ "ยังไม่มี att_id" ใน
+ *    uploadedMeta (ตัวที่อัปโหลดไปแล้วตอนเลือกไฟล์จะถูกข้าม — กันซ้ำ)
+ * 4. รายงานผลแบบแยกส่วน: บันทึกข้อมูลสำเร็จแต่ไฟล์บางเล่มพลาด → แจ้งชัดเจน
+ *    ว่าเล่มไหนพลาด พร้อมวิธีแก้ (เปิดแก้ไขแล้วอัปโหลดใหม่) แทนที่จะถือว่า
+ *    ล้มเหลวทั้งหมด — เพราะข้อมูลหลักถูกบันทึกไปแล้วจริง ๆ
+ */
 document.getElementById('mainForm').addEventListener('submit',async e=>{
   e.preventDefault();
   const d=getForm();
-  if(pendingReads>0) return toast('⏳ กำลังโหลดไฟล์ PDF อยู่ กรุณารอสักครู่แล้วกดบันทึกอีกครั้ง','#f59e0b');
   const missing=[];
   if(!d.p1_title)         missing.push('คำนำหน้า');
   if(!d.p1_fname)         missing.push('ชื่อ');
@@ -1013,12 +1315,12 @@ document.getElementById('mainForm').addEventListener('submit',async e=>{
     const uploadFails=[];
     if(USE_FLASK&&savedId){
       for(let n=1;n<=3;n++){
-        if(fileCache[n]?.base64&&!uploadedMeta[n]?.att_id){
+        if(fileCache[n]?.file&&!uploadedMeta[n]?.att_id){
           const ok=await _uploadToFlask(n,savedId);
           if(!ok) uploadFails.push(n);
         }
       }
-      if(fileCache['ann']?.base64&&!uploadedMeta['ann']?.att_id){
+      if(fileCache['ann']?.file&&!uploadedMeta['ann']?.att_id){
         const ok=await _uploadToFlaskAnn(savedId);
         if(!ok) uploadFails.push('ประกาศ');
       }
@@ -1034,6 +1336,28 @@ document.getElementById('mainForm').addEventListener('submit',async e=>{
   }catch(err){ toastError(err); }
 });
 
+/* ================================================================
+ * Table (tab รายการทั้งหมด)
+ * ================================================================ */
+
+/**
+ * renderTable — วาดตารางรายการใหม่ทั้งก้อนจาก allRecords
+ *
+ * Pipeline: filter → sort → map เป็น HTML string → เซ็ต innerHTML ครั้งเดียว
+ * (rebuild ทั้งตารางทุกครั้งที่พิมพ์ค้นหา — ยอมรับได้เพราะข้อมูลหลักร้อยแถว
+ * และง่ายกว่าการ diff DOM มาก)
+ *
+ * การค้นหา: แบบ substring (case-insensitive) บน 6 ฟิลด์หลัก
+ * ชื่อ/นามสกุล/ตำแหน่ง/กลุ่มงาน/เลขที่/สำนัก — เจอฟิลด์ใดฟิลด์หนึ่งก็ผ่าน (OR)
+ * ทำงานร่วมกับ filter สถานะแบบ AND
+ *
+ * การเรียง: id น้อย→มาก (เก่าก่อน) — รองรับทั้ง id ตัวเลข (SQLite) และ
+ * _id string (LocalStorage ใช้เทียบ string แทน)
+ *
+ * คะแนนเฉลี่ยต่อแถว: เฉลี่ยจากคะแนน 5.1 ที่ > 0 (ตัดแถวยังไม่กรอกทิ้ง)
+ *
+ * @returns {undefined} (side effect: อัปเดต tbody + ตัวนับ "แสดง x/y รายการ")
+ */
 function renderTable(){
   const q=(document.getElementById('search-input').value||'').toLowerCase();
   const st=document.getElementById('filter-status').value;
@@ -1041,6 +1365,10 @@ function renderTable(){
     const m=!q||[r.p1_fname,r.p1_lname,r.p2_pos_current,r.p2_dept,r.p2_empid,r.p2_sec]
                  .some(v=>(v||'').toLowerCase().includes(q));
     return m&&(!st||r.p5_work_result===st);
+  }).sort((a,b)=>{
+    if(a.id!==undefined&&b.id!==undefined) return (Number(a.id)||0)-(Number(b.id)||0);
+    const ai=a._id||'', bi=b._id||'';
+    return ai<bi?-1:ai>bi?1:0;
   });
   document.getElementById('rec-shown').textContent=f.length;
   document.getElementById('rec-total').textContent=allRecords.length;
@@ -1051,14 +1379,14 @@ function renderTable(){
     try{ const ev=JSON.parse(r.eval51_rows||'[]').map(x=>parseFloat(x.score)||0).filter(v=>v>0);
          if(ev.length) avg=(ev.reduce((a,b)=>a+b)/ev.length).toFixed(2)+'%'; }catch{}
     return `<tr>
-      <td>${i+1}</td><td>${r.p2_empid||'-'}</td>
-      <td>${r.p1_title||''}${r.p1_fname||''} ${r.p1_lname||''}</td>
-      <td>${r.p2_pos_current||'-'}</td>
-      <td><span class="badge bg-secondary bsm">${r.p2_pos_level||'-'}</span></td>
-      <td>${r.p2_dept||'-'}</td><td>${r.p2_sec||'-'}</td>
+      <td>${i+1}</td><td>${esc(r.p2_empid)||'-'}</td>
+      <td>${esc(r.p1_title)}${esc(r.p1_fname)} ${esc(r.p1_lname)}</td>
+      <td>${esc(r.p2_pos_current)||'-'}</td>
+      <td><span class="badge bg-secondary bsm">${esc(r.p2_pos_level)||'-'}</span></td>
+      <td>${esc(r.p2_dept)||'-'}</td><td>${esc(r.p2_sec)||'-'}</td>
       <td class="text-center fw-bold">${avg}</td>
-      <td>${r.p5_work_result?`<span class="badge bg-${WC[r.p5_work_result]||'secondary'} bsm">${r.p5_work_result}</span>`:'-'}</td>
-      <td style="white-space:nowrap;font-size:.72rem">${r._created||r.created||''}</td>
+      <td>${r.p5_work_result?`<span class="badge bg-${WC[r.p5_work_result]||'secondary'} bsm">${esc(r.p5_work_result)}</span>`:'-'}</td>
+      <td style="white-space:nowrap;font-size:.72rem">${esc(r._created||r.created)}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-sm btn-outline-primary me-1 py-0" onclick="editRec('${rid}')"><i class="fa fa-edit"></i></button>
         <button class="btn btn-sm btn-outline-danger py-0" onclick="delRec('${rid}')"><i class="fa fa-trash"></i></button>
@@ -1066,6 +1394,18 @@ function renderTable(){
   }).join('');
 }
 
+/**
+ * editRec — เปิด record ขึ้นมาแก้ไขในแท็บฟอร์ม
+ *
+ * ขั้นตอน: refresh ข้อมูลล่าสุดก่อน (กันแก้ทับข้อมูลเก่า) → หา record
+ * (เทียบด้วย == เพราะ id จาก onclick เป็น string แต่ id ของ SQLite เป็น number)
+ * → สลับไปแท็บฟอร์ม → เติมฟอร์ม + เซ็ต rec-id (สวิตช์เข้าโหมด UPDATE)
+ * → ล้างสถานะไฟล์แล้วโหลดไฟล์แนบจริงของ record นี้มาแสดง
+ * setTimeout 100ms: รอให้การสลับแท็บ render เสร็จก่อนค่อยเติมข้อมูล
+ *
+ * @param {string} id  record id (มาจาก attribute onclick ในแถวตาราง)
+ * @returns {Promise<void>}
+ */
 async function editRec(id){
   await loadAll();
   const r=allRecords.find(x=>(x._id||x.id)==id);
@@ -1077,6 +1417,12 @@ async function editRec(id){
     window.scrollTo(0,0); toast('โหลดข้อมูลเพื่อแก้ไขแล้ว','#0d6efd');
   },100);
 }
+/**
+ * clearForm_filesOnly — reset เฉพาะส่วนไฟล์ (cache + UI ทุกช่อง) โดยไม่แตะ
+ * ค่าในฟอร์ม — ใช้ตอน editRec เพื่อล้างไฟล์ของ record ก่อนหน้าออกก่อน
+ * โหลดไฟล์ของ record ใหม่เข้ามาแทน
+ * @returns {undefined}
+ */
 function clearForm_filesOnly(){
   for(let n=1;n<=3;n++){
     delete fileCache[n]; delete uploadedMeta[n];
@@ -1093,18 +1439,54 @@ function clearForm_filesOnly(){
   document.getElementById('uzone-lbl-ann').textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
   setUploadStatusAnn('ยังไม่มีไฟล์','secondary');
 }
+/**
+ * delRec — ลบรายการเดียว (มี confirm ป้องกันกดพลาด — ฝั่ง server จะลบ
+ * ไฟล์แนบตามให้ด้วย CASCADE)
+ * @param {string|number} id  record id
+ * @returns {Promise<void>}
+ */
 async function delRec(id){
   if(!confirm('ต้องการลบรายการนี้?\n(ไฟล์แนบจะถูกลบด้วย)')) return;
   await dbDel(id); toast('ลบรายการเรียบร้อย','#dc3545');
   await loadAll(); renderTable();
 }
+/**
+ * clearAll — ลบข้อมูลทั้งหมดในระบบ (การกระทำที่ย้อนกลับไม่ได้ — confirm ก่อนเสมอ)
+ * @returns {Promise<void>}
+ */
 async function clearAll(){
   if(!confirm('ต้องการลบข้อมูลทั้งหมด?\n(ไม่สามารถย้อนกลับได้)')) return;
   await dbClear(); toast('ลบข้อมูลทั้งหมดเรียบร้อย','#dc3545');
   await loadAll(); renderTable();
 }
 
+/* ================================================================
+ * Export (CSV / JSON) — ทำฝั่ง client ทั้งหมดจาก cache allRecords
+ * ================================================================ */
+
+/**
+ * dl — trigger การดาวน์โหลดไฟล์จาก string ใน memory
+ * เทคนิคมาตรฐาน: ห่อเนื้อหาเป็น Blob → สร้าง object URL → คลิกลิงก์ <a download> จำลอง
+ * @param {string} c  เนื้อหาไฟล์
+ * @param {string} n  ชื่อไฟล์ที่ให้ผู้ใช้บันทึก
+ * @param {string} t  MIME type เช่น 'text/csv;charset=utf-8'
+ * @returns {undefined}
+ */
 function dl(c,n,t){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([c],{type:t})); a.download=n; a.click(); }
+/**
+ * exportAllCSV — export ทุก record เป็น CSV ที่เปิดใน Excel ได้ทันที
+ *
+ * อัลกอริทึม flatten: CSV เป็นตาราง 2 มิติ แต่ eval51/52_rows เป็น array
+ * ซ้อนใน record → กระจายเป็นคอลัมน์แบน ๆ ชื่อ `<field>_<ลำดับแถว>_<ชื่อฟิลด์>`
+ * เช่น eval51_rows_1_score (จำนวนคอลัมน์ยืดตาม record ที่มีแถวเยอะสุด)
+ * จากนั้นรวม key ของทุกแถวด้วย Set — เพราะแต่ละ record มีจำนวนรอบประเมิน
+ * ไม่เท่ากัน header จึงต้องเป็น superset ของทุกแถว
+ *
+ * Escape ตามกฎ CSV: ครอบทุกค่าด้วย " และแปลง " ภายในเป็น "" (กันค่า
+ * ที่มี comma/ขึ้นบรรทัดใหม่ทำให้คอลัมน์เพี้ยน) + นำหน้าไฟล์ด้วย BOM
+ * (U+FEFF) เพื่อให้ Excel บน Windows อ่านภาษาไทย UTF-8 ถูกต้อง
+ * @returns {undefined}
+ */
 function exportAllCSV(){
   if(!allRecords.length) return toast('ไม่มีข้อมูล','#dc3545');
   const flat=allRecords.map(r=>{
@@ -1118,25 +1500,76 @@ function exportAllCSV(){
   dl('﻿'+[keys.join(','),...rows].join('\n'),`hr_promo_${dStr()}.csv`,'text/csv;charset=utf-8');
   toast('Export CSV สำเร็จ ✓');
 }
+/**
+ * exportAllJSON — dump allRecords เป็น JSON ตรง ๆ (indent 2)
+ * เหมาะเป็นไฟล์สำรอง/ส่งต่อระบบอื่นเพราะเก็บโครงสร้างเดิมครบ ไม่ต้อง flatten
+ * @returns {undefined}
+ */
 function exportAllJSON(){
   if(!allRecords.length) return toast('ไม่มีข้อมูล','#dc3545');
   dl(JSON.stringify(allRecords,null,2),`hr_promo_${dStr()}.json`,'application/json');
   toast('Export JSON สำเร็จ ✓');
 }
 
+/* ================================================================
+ * Dashboard (Chart.js)
+ * ================================================================ */
+
+/**
+ * kc (kill chart) — destroy Chart.js instance เดิมก่อนวาดใหม่
+ * จำเป็นเพราะ Chart.js ไม่ยอมสร้าง chart ซ้อนบน canvas เดิม (throw error)
+ * และ instance เก่าจะ leak memory + event listener ถ้าไม่ destroy
+ * @param {string} k  id ของ canvas / key ใน charts
+ * @returns {undefined}
+ */
 function kc(k){ if(charts[k]){charts[k].destroy();delete charts[k];} }
+/**
+ * mkDoughnut — helper สร้างกราฟโดนัท (ใช้กับสัดส่วนผลการพิจารณา)
+ * @param {string} id            id ของ canvas
+ * @param {string[]} labels      ป้ายชื่อแต่ละชิ้น
+ * @param {number[]} data        ค่าประจำแต่ละชิ้น (ลำดับตรงกับ labels)
+ * @param {string} title         ชื่อกราฟ
+ * @returns {undefined} (เก็บ instance ไว้ใน charts[id])
+ */
 function mkDoughnut(id,labels,data,title){
   kc(id); charts[id]=new Chart(document.getElementById(id),{type:'doughnut',
     data:{labels,datasets:[{data,backgroundColor:COLORS,borderWidth:2,hoverOffset:6}]},
     options:{plugins:{title:{display:true,text:title,font:{size:13,family:'Sarabun'}},
       legend:{position:'bottom',labels:{font:{family:'Sarabun'},padding:10}}},cutout:'55%'}});
 }
-function mkBar(id,labels,data,title,color='#1a3a6b'){
+/**
+ * mkBar — helper สร้างกราฟแท่งแนวตั้ง (แกน y เริ่มที่ 0, step ทีละ 1
+ * เพราะใช้กับข้อมูลจำนวนนับ)
+ * @param {string} id            id ของ canvas
+ * @param {string[]} labels      ป้ายแกน x
+ * @param {number[]} data        ค่าของแต่ละแท่ง
+ * @param {string} title         ชื่อกราฟ
+ * @param {string} [color]       สีแท่ง (hex)
+ * @returns {undefined} (เก็บ instance ไว้ใน charts[id])
+ */
+function mkBar(id,labels,data,title,color='#1976D2'){
   kc(id); charts[id]=new Chart(document.getElementById(id),{type:'bar',
     data:{labels,datasets:[{label:title,data,backgroundColor:color,borderRadius:5}]},
     options:{plugins:{title:{display:true,text:title,font:{size:13,family:'Sarabun'}},legend:{display:false}},
       scales:{x:{ticks:{font:{family:'Sarabun'},maxRotation:40}},y:{ticks:{stepSize:1,font:{family:'Sarabun'}},beginAtZero:true}}}});
 }
+/**
+ * renderDashboard — คำนวณสถิติและวาดกราฟทั้งหน้าสรุปภาพรวม
+ *
+ * เดินข้อมูล allRecords "รอบเดียว" แล้วสะสมพร้อมกันทุกมิติ (single-pass
+ * aggregation): นับตามผลพิจารณา (wc), ระดับตำแหน่ง (lc), สำนัก/กอง (sc)
+ * ด้วย object เป็น counter + สะสมคะแนนเฉลี่ยรายคน (sum/cnt)
+ *
+ * นิยามคะแนน 2 ชั้น: คะแนนต่อคน = ค่าเฉลี่ยรอบประเมิน 5.1 ของคนนั้น
+ * (เฉพาะค่า > 0) แล้ว "คะแนนเฉลี่ยรวม" = เฉลี่ยของค่าเฉลี่ยรายคนอีกที
+ * — ให้น้ำหนักทุกคนเท่ากันไม่ว่ามีกี่รอบประเมิน
+ *
+ * กราฟคะแนนรายบุคคล: จำกัด 30 คนแรกกันกราฟแน่นเกินอ่าน, แท่งเขียว/แดง
+ * ตามเกณฑ์ผ่าน 60% และซ้อนเส้นประ (dataset type:'line' ค่าคงที่ 60)
+ * เป็นเส้นเกณฑ์อ้างอิง
+ *
+ * @returns {undefined} (side effect: อัปเดต stat cards + กราฟ 4 ตัว)
+ */
 function renderDashboard(){
   const total=allRecords.length;
   const passed=allRecords.filter(r=>r.p5_work_result==='ผ่าน').length;
@@ -1155,7 +1588,7 @@ function renderDashboard(){
     <div class="col-6 col-lg-3"><div class="sc"><div class="val text-warning">${avg}${cnt?'%':''}</div><div class="lbl"><i class="fa fa-star me-1"></i>คะแนนเฉลี่ยรวม</div></div></div>
     <div class="col-6 col-lg-3"><div class="sc"><div class="val text-info">${total?((passed/total)*100).toFixed(1)+'%':'-'}</div><div class="lbl"><i class="fa fa-percent me-1"></i>อัตราผ่าน</div></div></div>`;
   mkDoughnut('chart-result',Object.keys(wc),Object.values(wc),'ผลการพิจารณาผลงาน');
-  mkBar('chart-level',Object.keys(lc),Object.values(lc),'จำนวนตามระดับตำแหน่ง','#2a5298');
+  mkBar('chart-level',Object.keys(lc),Object.values(lc),'จำนวนตามระดับตำแหน่ง','#1976D2');
   mkBar('chart-sec',Object.keys(sc),Object.values(sc),'จำนวนตามสำนัก/กอง/ศูนย์','#c8a951');
   kc('chart-score');
   const names=allRecords.map(r=>`${r.p1_fname||''} ${r.p1_lname||''}`).slice(0,30);
@@ -1173,6 +1606,8 @@ function renderDashboard(){
       scales:{x:{ticks:{font:{family:'Sarabun'},maxRotation:45}},y:{min:0,max:100,ticks:{font:{family:'Sarabun'}}}}}});
 }
 
+/* ── Init ── สร้าง UI ช่องอัปโหลด แล้ว reset ฟอร์มเป็นสถานะเริ่มต้น
+ * (ต้องเรียง buildFilePanels ก่อน เพราะ clearForm อ้างถึง element ของช่องไฟล์) */
 buildFilePanels();
 clearForm();
 </script>

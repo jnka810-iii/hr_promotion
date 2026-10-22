@@ -1,0 +1,137 @@
+{
+  "project_name": "hr_promotion",
+  "stack": [
+    { "name": "Python", "category": "backend", "icon": "python" },
+    { "name": "Flask", "category": "backend", "icon": "python" },
+    { "name": "SQLite", "category": "database", "icon": "sqlite" },
+    { "name": "pywebview", "category": "frontend", "icon": "box" },
+    { "name": "Bootstrap 5", "category": "frontend", "icon": "box" },
+    { "name": "Chart.js", "category": "frontend", "icon": "chart" },
+    { "name": "Jinja2", "category": "frontend", "icon": "box" }
+  ],
+  "features": [
+    {
+      "id": "personnel_form",
+      "name": "Personnel Data Entry",
+      "layer": "frontend",
+      "plain_english": "This is where HR staff fill in a multi-section form capturing an employee's personal details, current position, and the position they are being evaluated for promotion to.",
+      "files": [
+        "app.py",
+        "templates/index.html"
+      ],
+      "icon": "file"
+    },
+    {
+      "id": "work_evaluation",
+      "name": "Work Evaluation & Scoring",
+      "layer": "frontend",
+      "plain_english": "This is where past work achievements, performance scores, evaluation dates, and structured evaluation grids (eval51_rows, eval52_rows) are recorded for each candidate.",
+      "files": [
+        "app.py",
+        "templates/index.html"
+      ],
+      "icon": "chart"
+    },
+    {
+      "id": "records_api",
+      "name": "Records CRUD API",
+      "layer": "api",
+      "plain_english": "This is the server-side logic that creates, reads, updates, and deletes promotion records, including validation of required Thai-language fields.",
+      "files": [
+        "app.py"
+      ],
+      "icon": "settings"
+    },
+    {
+      "id": "attachments",
+      "name": "PDF Attachment Management",
+      "layer": "api",
+      "plain_english": "This is where PDF documents (announcement letters, supporting documents) are uploaded, stored as UUID-named files on disk, previewed, and downloaded.",
+      "files": [
+        "app.py",
+        "templates/index.html",
+        "static/uploads/94d9bc5caa1e4c1cab80e79e7d2ba328.pdf",
+        "static/uploads/af52711ca6814bfe80ef66cb56e47160.pdf"
+      ],
+      "icon": "file"
+    },
+    {
+      "id": "dashboard",
+      "name": "Summary Dashboard",
+      "layer": "frontend",
+      "plain_english": "This is where statistics are shown — total candidates, pass/fail counts by result and position level — rendered as charts using Chart.js.",
+      "files": [
+        "app.py",
+        "templates/index.html"
+      ],
+      "icon": "dashboard"
+    },
+    {
+      "id": "records_list",
+      "name": "Records List & Search",
+      "layer": "frontend",
+      "plain_english": "This is the searchable table view listing all submitted promotion records so HR staff can quickly find, edit, or delete an entry.",
+      "files": [
+        "app.py",
+        "templates/index.html"
+      ],
+      "icon": "globe"
+    },
+    {
+      "id": "export",
+      "name": "CSV Export",
+      "layer": "api",
+      "plain_english": "This lets HR staff download all records as a CSV file for use in Excel or other reporting tools.",
+      "files": [
+        "app.py"
+      ],
+      "icon": "file"
+    },
+    {
+      "id": "database",
+      "name": "Database & Migrations",
+      "layer": "database",
+      "plain_english": "This is the SQLite database that stores all promotion records and attachment metadata, with automatic schema migration handling legacy BLOB columns.",
+      "files": [
+        "hr_promotion.db",
+        "app.py",
+        "check_db.py",
+        "fix_db.py"
+      ],
+      "icon": "sqlite"
+    },
+    {
+      "id": "infrastructure",
+      "name": "Infrastructure & Desktop Launcher",
+      "layer": "backend",
+      "plain_english": "This handles packaging the app as a Windows desktop executable using pywebview and PyInstaller, and configures the Flask server for both dev and frozen modes.",
+      "files": [
+        "app.py",
+        ".gitignore"
+      ],
+      "icon": "settings"
+    }
+  ],
+  "external_services": [
+    {
+      "id": "google_fonts",
+      "name": "Google Fonts",
+      "purpose": "Loads the Sarabun Thai-language typeface for the UI"
+    },
+    {
+      "id": "bootstrap_cdn",
+      "name": "Bootstrap CDN (cdnjs)",
+      "purpose": "Delivers Bootstrap 5 CSS for responsive layout and UI components"
+    },
+    {
+      "id": "fontawesome_cdn",
+      "name": "Font Awesome CDN",
+      "purpose": "Delivers icon glyphs used throughout the interface"
+    },
+    {
+      "id": "chartjs_cdn",
+      "name": "Chart.js CDN",
+      "purpose": "Renders bar and summary charts on the dashboard tab"
+    }
+  ]
+}

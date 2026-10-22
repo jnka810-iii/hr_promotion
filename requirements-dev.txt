@@ -1,0 +1,5 @@
+# เครื่องมือสำหรับพัฒนา/ทดสอบเท่านั้น — ไม่ต้องติดตั้งบนเครื่องผู้ใช้และไม่ต้องแพ็กเข้า .exe
+# ติดตั้ง: .venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+# รัน test: .venv/Scripts/python.exe -m pytest
+-r requirements.txt
+pytest==9.1.1

@@ -13,7 +13,7 @@ python app.py        # pywebview window (or browser fallback on http://127.0.0.1
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest     # 100 tests, ~2.5s
+python -m pytest     # 104 tests, ~2.7s
 ```
 
 Tests monkeypatch `DB_PATH` + `UPLOAD_FOLDER` to pytest's `tmp_path` — they must never touch
@@ -107,7 +107,7 @@ displaced are never deleted. Measured before the fix: 4 concurrent uploads left 
 | `_safe_remove(path)` | Delete file, swallow errors |
 | `_stored_path(stored_name)` | `UPLOAD_FOLDER / stored_name` |
 | `init_db()` | Create tables + additive ALTER TABLE migrations |
-| `_migrate_blobs_to_files(con)` | One-time: move old BLOB schema → file-based schema |
+| `_migrate_blobs_to_files(con)` | One-time: move old BLOB schema → file-based schema. **Invariant:** a failure at any step leaves no file on disk that no row points at. Every step after the `.db` backup is one transaction, so the DB rolls itself back, but files have no transaction — one `except` rolls back, removes what it wrote and re-raises. Filtering already-migrated rows with a `WHERE` does not give you this: a rollback resets `stored_name` on every row, so there is no intermediate state to filter |
 
 ## API Routes
 

@@ -3,6 +3,8 @@ static/uploads/*.pdf
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 
 # Test artifacts
 .pytest_cache/

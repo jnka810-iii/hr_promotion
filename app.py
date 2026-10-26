@@ -6,7 +6,7 @@ Flask + SQLite3 + pywebview  →  Desktop App (.exe)
 DB เก็บเฉพาะ stored_name (UUID filename) และ filename (ชื่อต้นฉบับ)
 """
 
-import os, re, sys, sqlite3, threading, time, base64, json, uuid, shutil, logging
+import os, re, sys, socket, sqlite3, threading, time, base64, json, uuid, shutil, logging
 from contextlib import closing
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -1184,6 +1184,35 @@ def _setup_logging():
         target.addHandler(handler)
         target.setLevel(logging.INFO)
 
+# เพดานเวลารอ server ตอนเปิดโปรแกรม ตั้งไว้กว้างเพราะเครื่องผู้ใช้ปลายทาง
+# อาจมี antivirus สแกน .exe ที่เพิ่งแตกไฟล์อยู่ ซึ่งกินเวลาหลายวินาที
+STARTUP_WAIT_SECONDS = 10.0
+
+def _wait_for_port(port: int, timeout: float = STARTUP_WAIT_SECONDS,
+                   host: str = '127.0.0.1') -> bool:
+    """
+    รอจนกว่า port จะรับ connection ได้จริง
+
+    คืน False เมื่อหมดเวลาแทนการ raise หรือวนต่อไม่สิ้นสุด เพราะผู้เรียกต้อง
+    เปิดหน้าต่างให้ได้อยู่ดี — หน้าต่างที่ไม่เคยเปิดแย่กว่าหน้าต่างที่โหลดช้า
+
+    Parameters:
+        port (int): port ที่รอ
+        timeout (float): เพดานเวลารวม (วินาที)
+        host (str): host ที่ลองต่อ
+
+    Returns:
+        bool: True = ต่อติดแล้ว, False = หมดเวลา
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
 def run_flask():
     """
     รัน Flask server สำหรับโหมด desktop (ถูกเรียกใน background thread)
@@ -1206,8 +1235,8 @@ def main():
     เพราะ GUI library ส่วนใหญ่บังคับให้ event loop อยู่ main thread เท่านั้น
     การตั้ง daemon=True ทำให้ Flask thread ถูกเก็บกวาดอัตโนมัติเมื่อผู้ใช้
     ปิดหน้าต่าง (ไม่ต้องจัดการ shutdown เอง)
-    sleep(0.8) = รอให้ server เปิด port เสร็จก่อน webview โหลด URL
-    (วิธี simple แบบ fixed-delay — แลกความง่ายกับ delay เล็กน้อยตอนเปิด)
+    รอด้วย _wait_for_port ไม่ใช่ sleep คงที่ เพราะเวลาที่ server ใช้เปิด port
+    ขึ้นกับเครื่องผู้ใช้ ไม่ใช่ค่าที่เดาไว้ล่วงหน้าได้
 
     โหมด fallback (ไม่มี pywebview เช่น รันบนเครื่อง dev):
     รันเป็น web server ปกติให้เปิดผ่านเบราว์เซอร์ ผูกที่ 127.0.0.1 เท่านั้นเหมือนโหมด desktop
@@ -1223,7 +1252,11 @@ def main():
     if HAS_WEBVIEW:
         t = threading.Thread(target=run_flask, daemon=True)
         t.start()
-        time.sleep(0.8)
+        # เปิดหน้าต่างต่อแม้รอไม่ทัน: หน้าขาวที่ refresh ได้ยังดีกว่าโปรแกรม
+        # ที่กดเปิดแล้วไม่มีอะไรขึ้นมาเลย และ log เป็นร่องรอยเดียวที่เหลือไว้สืบ
+        if not _wait_for_port(PORT):
+            log.warning('server ยังไม่รับ connection ใน %.0f วินาที เปิดหน้าต่างต่อ',
+                        STARTUP_WAIT_SECONDS)
         webview.create_window(
             title='ระบบบันทึกข้อมูลบุคคลและประเมินผลงานเพื่อเลื่อนระดับตำแหน่ง',
             url=f'http://127.0.0.1:{PORT}',

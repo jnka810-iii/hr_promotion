@@ -51,11 +51,8 @@ def test_item5_thai_readable_in_raw_list_response(client, make_record):
 def test_item5_thai_readable_in_single_record_and_eval_rows(client, make_record):
     rid = make_record()
     rows = [{'date': '2026-04-21', 'score': '90', 'grade': 'ผ่าน (≥60%)'}]
-    r = client.put('/api/records/%d' % rid, json={
-        'p1_fname': 'สมหญิง', 'p1_lname': 'ใจดี',
-        'p2_pos_current': 'นักวิชาการคอมพิวเตอร์', 'p2_empid': '12345',
-        'eval51_rows': rows,
-    })
+    r = client.put('/api/records/%d' % rid,
+                   json=dict(VALID_RECORD, p1_fname='สมหญิง', eval51_rows=rows))
     assert r.status_code == 200
     body = client.get('/api/records/%d' % rid).get_data(as_text=True)
     assert 'สมหญิง' in body
@@ -230,9 +227,13 @@ def test_item7_delete_all_success_removes_every_file(client, make_record, upload
 # ────────────────────────────────────────────────
 
 def test_required_fields_rejected_with_thai_labels(client):
+    """
+    ป้ายภาษาไทยอยู่ใน `missing` ไม่ใช่ใน `error` เพราะ `error` คือข้อความที่ frontend
+    เอาไปโชว์ ซึ่งต้องสั้นกว่า 80 ตัวอักษร (ดู required_error ใน app.py)
+    """
     r = client.post('/api/records', json={'p1_fname': 'สมชาย'})
     assert r.status_code == 422
-    assert 'นามสกุล' in r.get_json()['error']
+    assert 'นามสกุล' in r.get_json()['missing']
 
 
 def test_update_missing_record_returns_404(client):
@@ -831,8 +832,11 @@ def test_item25_server_enforces_what_the_form_asks_for(client):
     """
     ฟอร์มขึ้นดอกจัน 13 ช่องแล้วไม่ยอมให้บันทึกถ้าไม่ครบ นั่นคือกฎที่ผู้ใช้เจอจริง
     ส่วน server เคยบังคับแค่ 4 ช่อง กฎเดียวกันจึงถูกเขียนไว้สองที่ด้วยค่าไม่เท่ากัน
+
+    เทียบเป็น list ของคู่ ไม่ใช่ dict เพราะลำดับคือส่วนหนึ่งของสัญญา: ข้อความบอก
+    ฟิลด์ที่ยังว่างต้องไล่ตามลำดับช่องในฟอร์มเหมือนกันทั้งสองฝั่ง
     """
-    assert _rendered_required_list(client) == hr.REQUIRED_FIELDS
+    assert _rendered_required_list(client) == [list(p) for p in hr.REQUIRED_FIELDS.items()]
 
 
 def test_item25_form_markup_has_no_second_copy_of_the_rule():
@@ -850,7 +854,7 @@ def test_item25_every_required_field_has_an_input_in_the_form(client):
     ฟิลด์ที่ server บังคับแต่ฟอร์มไม่มีช่องให้กรอก = ผู้ใช้บันทึกไม่ได้และแก้เองไม่ได้
     """
     src = _template_source()
-    for col in _rendered_required_list(client):
+    for col, _label in _rendered_required_list(client):
         assert 'id="%s"' % col in src, col
 
 
@@ -867,7 +871,7 @@ def test_item25_post_with_only_the_old_four_fields_is_rejected(client):
     r = client.post('/api/records', json={
         'p1_fname': 'ก', 'p1_lname': 'ข', 'p2_pos_current': 'ค', 'p2_empid': '1'})
     assert r.status_code == 422
-    assert 'คำนำหน้า' in r.get_json()['error']
+    assert 'คำนำหน้า' in r.get_json()['missing']
 
 
 def test_item25_put_with_only_the_old_four_fields_is_rejected(client, make_record):
@@ -879,3 +883,19 @@ def test_item25_put_with_only_the_old_four_fields_is_rejected(client, make_recor
 
 def test_item25_full_record_is_accepted(client):
     assert client.post('/api/records', json=VALID_RECORD).status_code == 201
+def test_item25_error_message_stays_under_the_toast_limit(client):
+    """
+    ไล่ชื่อครบทั้ง 13 ช่องยาว 303 ตัวอักษร ซึ่งทะลุเพดาน 80 ของ toastError
+    = เปิด alert() ทับหน้าจอ รายชื่อเต็มจึงย้ายไปอยู่ใน `missing`
+    """
+    body = client.post('/api/records', json={}).get_json()
+    assert len(body['missing']) == len(hr.REQUIRED_FIELDS)
+    assert len(body['error']) < MAX_CLIENT_MESSAGE
+
+
+def test_item25_single_missing_field_is_named(client):
+    """ขาดช่องเดียวยังสั้นพอที่จะบอกชื่อช่องตรง ๆ ซึ่งมีประโยชน์กว่าบอกจำนวน"""
+    r = client.post('/api/records', json=dict(VALID_RECORD, p1_lname=''))
+    assert r.status_code == 422
+    assert r.get_json()['error'] == 'กรุณากรอกนามสกุล'
+    assert len(r.get_json()['error']) < MAX_CLIENT_MESSAGE

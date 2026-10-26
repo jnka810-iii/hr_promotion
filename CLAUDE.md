@@ -13,7 +13,7 @@ python app.py        # pywebview window (or browser fallback on http://127.0.0.1
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest     # 90 tests, ~2.7s
+python -m pytest     # 100 tests, ~2.5s
 ```
 
 Tests monkeypatch `DB_PATH` + `UPLOAD_FOLDER` to pytest's `tmp_path` — they must never touch
@@ -61,7 +61,12 @@ Personnel data for one promotion candidate per row.
 - `eval51_rows`, `eval52_rows` — JSON arrays (evaluation grid rows), stored as TEXT
 - `created`, `updated` — datetime strings `dd/mm/YYYY HH:MM`
 
-Required fields (validated in `validate_required()`): `p1_fname`, `p1_lname`, `p2_pos_current`, `p2_empid`
+Required fields live in **one** place, `REQUIRED_FIELDS` in [app.py](app.py) — 13 columns, each
+mapped to the Thai label the user sees. `index()` hands the list to the page, which derives the
+asterisks, the `required` attributes and the pre-submit check from it; the markup carries none of
+those itself. **Invariant:** it travels as a list of pairs, not a dict — Jinja `tojson` sorts keys,
+and the order of that list is the order the "you missed these" message names fields on both sides.
+Labels must stay unique: `ตำแหน่งเลขที่` exists in two sections, so each carries its section.
 
 ### `attachments`
 
@@ -93,6 +98,7 @@ displaced are never deleted. Measured before the fix: 4 concurrent uploads left 
 | `get_db()` | Open SQLite connection with WAL + FK |
 | `sanitize_record(d)` | Whitelist RECORD_COLS; serialize eval*_rows → JSON string |
 | `validate_required(allowed)` | Return list of missing Thai field labels |
+| `required_error(missing)` | Build the 422 for missing fields. `error` is what the client shows, so it names the field only when exactly one is missing and counts them otherwise — all 13 labels run to 303 characters, well past the 80 that turns a toast into a blocking `alert()`. The full list goes in `missing` for callers that read it |
 | `sanitize_display_name(name, fallback)` | Clean the original filename for DB + `download_name` — strips path separators and control chars only, **keeps Thai**. Never use `secure_filename()` here: it drops all non-ASCII (`'ประกาศ.pdf'` → `'pdf'`) |
 | `csv_cell(value)` | Prefix a cell with `'` when it starts with `=`, `+`, `-`, `@`, tab or CR, so Excel shows it as text instead of running it as a formula. CSV quoting does not help: Excel strips the quotes first. Lives at the export, not at input validation, because the export reads the DB directly and `fix_db.py` edits it by hand |
 | `_dedupe_attachment_slots(con)` | Keep the highest `id` per `(record_id, book_no)` and return the displaced files for deletion after commit. Runs before `CREATE UNIQUE INDEX`, because an older DB can already hold duplicates and the index would otherwise raise inside `init_db()`, which stops the app from opening at all |

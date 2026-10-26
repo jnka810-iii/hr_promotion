@@ -6,9 +6,10 @@ Flask + SQLite3 + pywebview  →  Desktop App (.exe)
 DB เก็บเฉพาะ stored_name (UUID filename) และ filename (ชื่อต้นฉบับ)
 """
 
-import os, re, sys, sqlite3, threading, time, base64, json, uuid, shutil
+import os, re, sys, sqlite3, threading, time, base64, json, uuid, shutil, logging
 from contextlib import closing
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from flask import Flask, request, jsonify, render_template, send_file
 
 # pywebview เป็น optional dependency: มี = เปิดเป็นหน้าต่าง desktop,
@@ -38,6 +39,10 @@ app.config['MAX_CONTENT_LENGTH'] = 110 * 1024 * 1024
 # (110 MB เผื่อ overhead ของ multipart) การตรวจฝั่ง client ยกเลิกได้ด้วยการยิง API ตรง
 # จึงต้องมีสำเนาฝั่ง server เสมอ
 MAX_PDF_SIZE = 100 * 1024 * 1024
+
+# รายละเอียด exception ทั้งหมดไปอยู่ที่นี่ แทนที่จะส่งกลับให้ client (ดู fail())
+# handler ถูกต่อใน _setup_logging() ซึ่ง main() เรียก — import เปล่าจึงไม่สร้างไฟล์
+log = logging.getLogger('hr_promotion')
 
 # BASE_DIR ต้องชี้ถูกทั้ง 2 โหมด:
 # - รันปกติ (python app.py)     → โฟลเดอร์ของไฟล์ .py นี้
@@ -73,6 +78,33 @@ def get_db():
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")
     return con
+
+def fail(context: str, message: str, status: int = 500):
+    """
+    ตอบ error กลับให้ client โดยไม่เปิดเผยรายละเอียดภายในระบบ
+
+    เดิมทุก route ต่อ str(e) เข้าไปในข้อความ ทำให้ path ของไฟล์บนเครื่องผู้ใช้และ
+    โครงสร้าง SQL หลุดถึงหน้าจอ และเพราะ `toastError` (templates/index.html) เปิด
+    `alert()` ซ้อนเมื่อข้อความยาวเกิน 80 ตัวอักษร ข้อความ exception ที่มักยาวกว่านั้น
+    จึงกลายเป็น popup ที่ผู้ใช้ต้องกดปิด พร้อม path ภายในเครื่องเต็ม ๆ
+
+    การตัดสินใจว่า "client เห็นอะไรได้" อยู่ที่ฟังก์ชันนี้ที่เดียว ส่วนรายละเอียดจริง
+    ไปอยู่ใน log ฝั่ง server ทั้งหมด (ดู `_setup_logging`) เวลาผู้ใช้แจ้งปัญหาจึงยังมี
+    traceback ให้ดู
+
+    ต้องเรียกจากใน except block เท่านั้น — `log.exception()` อ่าน exception ที่กำลัง
+    ถูกจับอยู่จาก sys.exc_info() ถ้าเรียกนอก except จะได้แค่ 'NoneType: None'
+
+    Parameters:
+        context (str): ชื่อจุดที่ล้ม ใช้ค้นใน log เช่น 'add_record'
+        message (str): ข้อความภาษาไทยที่ผู้ใช้จะเห็น ต้องสั้นกว่า 80 ตัวอักษร
+        status (int): HTTP status code (default 500)
+
+    Returns:
+        tuple: (Response JSON, status) พร้อม return ออกจาก route ได้ตรง ๆ
+    """
+    log.exception(context)
+    return jsonify({'error': message}), status
 
 def now_str():
     """
@@ -302,103 +334,101 @@ def init_db():
         None (side effect: ไฟล์ DB และโฟลเดอร์ uploads ถูกสร้าง/อัปเดตให้พร้อมใช้)
     """
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    con = get_db()
-
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS records (
-            id                INTEGER PRIMARY KEY AUTOINCREMENT,
-            p1_title          TEXT NOT NULL DEFAULT '',
-            p1_fname          TEXT NOT NULL DEFAULT '',
-            p1_lname          TEXT NOT NULL DEFAULT '',
-            p1_edu            TEXT,
-            p1_edu_major      TEXT,
-            p2_pos_current    TEXT NOT NULL DEFAULT '',
-            p2_pos_level      TEXT,
-            p2_empid          TEXT NOT NULL DEFAULT '',
-            p2_dept           TEXT,
-            p2_sec            TEXT,
-            p2_org            TEXT,
-            p3_pos            TEXT,
-            p3_pos_level      TEXT,
-            p3_empid          TEXT,
-            p3_dept           TEXT,
-            p3_sec            TEXT,
-            p3_org            TEXT,
-            p3_announcement   TEXT,
-            p4_work1_title    TEXT,
-            p4_work1_year     TEXT,
-            p4_work2_title    TEXT,
-            p4_work2_year     TEXT,
-            p4_work3_title    TEXT,
-            p4_work3_year     TEXT,
-            p4_concept_title  TEXT,
-            p4_work_award     TEXT,
-            p5_doc_received   TEXT,
-            p5_work_result    TEXT,
-            p5_work_score     TEXT,
-            p5_work_eval_date TEXT,
-            eval51_rows       TEXT NOT NULL DEFAULT '[]',
-            eval52_rows       TEXT NOT NULL DEFAULT '[]',
-            created           TEXT,
-            updated           TEXT
-        )
-    """)
-
-    # ตรวจสอบ attachments table
-    att_exists = con.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'"
-    ).fetchone()
-
-    if att_exists:
-        att_cols = {row[1] for row in con.execute("PRAGMA table_info(attachments)").fetchall()}
-        if 'file_data' in att_cols:
-            # schema เก่า → migrate BLOB → files
-            _migrate_blobs_to_files(con)
-    else:
-        # สร้างตารางใหม่ (ไม่มี file_data BLOB)
+    with closing(get_db()) as con:
         con.execute("""
-            CREATE TABLE attachments (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                record_id   INTEGER NOT NULL,
-                book_no     TEXT    NOT NULL,
-                filename    TEXT    NOT NULL,
-                stored_name TEXT    NOT NULL DEFAULT '',
-                mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
-                file_size   INTEGER,
-                uploaded_at TEXT,
-                FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+            CREATE TABLE IF NOT EXISTS records (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                p1_title          TEXT NOT NULL DEFAULT '',
+                p1_fname          TEXT NOT NULL DEFAULT '',
+                p1_lname          TEXT NOT NULL DEFAULT '',
+                p1_edu            TEXT,
+                p1_edu_major      TEXT,
+                p2_pos_current    TEXT NOT NULL DEFAULT '',
+                p2_pos_level      TEXT,
+                p2_empid          TEXT NOT NULL DEFAULT '',
+                p2_dept           TEXT,
+                p2_sec            TEXT,
+                p2_org            TEXT,
+                p3_pos            TEXT,
+                p3_pos_level      TEXT,
+                p3_empid          TEXT,
+                p3_dept           TEXT,
+                p3_sec            TEXT,
+                p3_org            TEXT,
+                p3_announcement   TEXT,
+                p4_work1_title    TEXT,
+                p4_work1_year     TEXT,
+                p4_work2_title    TEXT,
+                p4_work2_year     TEXT,
+                p4_work3_title    TEXT,
+                p4_work3_year     TEXT,
+                p4_concept_title  TEXT,
+                p4_work_award     TEXT,
+                p5_doc_received   TEXT,
+                p5_work_result    TEXT,
+                p5_work_score     TEXT,
+                p5_work_eval_date TEXT,
+                eval51_rows       TEXT NOT NULL DEFAULT '[]',
+                eval52_rows       TEXT NOT NULL DEFAULT '[]',
+                created           TEXT,
+                updated           TEXT
             )
         """)
 
-    # เพิ่มคอลัมน์ใน records ที่อาจขาดหาย (backward compat)
-    existing = {row[1] for row in con.execute("PRAGMA table_info(records)").fetchall()}
-    new_cols = {
-        'p3_pos': 'TEXT', 'p3_pos_level': 'TEXT', 'p3_empid': 'TEXT',
-        'p3_dept': 'TEXT', 'p3_sec': 'TEXT', 'p3_org': 'TEXT',
-        'p3_announcement': 'TEXT',
-        'p4_work1_title': 'TEXT', 'p4_work1_year': 'TEXT',
-        'p4_work2_title': 'TEXT', 'p4_work2_year': 'TEXT',
-        'p4_work3_title': 'TEXT', 'p4_work3_year': 'TEXT',
-        'p4_concept_title': 'TEXT', 'p4_work_award': 'TEXT',
-        'p5_doc_received': 'TEXT', 'p5_work_result': 'TEXT',
-        'p5_work_score': 'TEXT', 'p5_work_eval_date': 'TEXT',
-        'eval51_rows': "TEXT NOT NULL DEFAULT '[]'",
-        'eval52_rows': "TEXT NOT NULL DEFAULT '[]'",
-        'p1_title':       "TEXT NOT NULL DEFAULT ''",
-        'p1_fname':       "TEXT NOT NULL DEFAULT ''",
-        'p1_lname':       "TEXT NOT NULL DEFAULT ''",
-        'p1_edu': 'TEXT', 'p1_edu_major': 'TEXT',
-        'p2_pos_current': "TEXT NOT NULL DEFAULT ''",
-        'p2_pos_level': 'TEXT',
-        'p2_empid':       "TEXT NOT NULL DEFAULT ''",
-        'p2_dept': 'TEXT', 'p2_sec': 'TEXT', 'p2_org': 'TEXT',
-    }
-    for col, ctype in new_cols.items():
-        if col not in existing:
-            con.execute(f'ALTER TABLE records ADD COLUMN {col} {ctype}')
+        # ตรวจสอบ attachments table
+        att_exists = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'"
+        ).fetchone()
 
-    con.commit()
-    con.close()
+        if att_exists:
+            att_cols = {row[1] for row in con.execute("PRAGMA table_info(attachments)").fetchall()}
+            if 'file_data' in att_cols:
+                # schema เก่า → migrate BLOB → files
+                _migrate_blobs_to_files(con)
+        else:
+            # สร้างตารางใหม่ (ไม่มี file_data BLOB)
+            con.execute("""
+                CREATE TABLE attachments (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    record_id   INTEGER NOT NULL,
+                    book_no     TEXT    NOT NULL,
+                    filename    TEXT    NOT NULL,
+                    stored_name TEXT    NOT NULL DEFAULT '',
+                    mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
+                    file_size   INTEGER,
+                    uploaded_at TEXT,
+                    FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+                )
+            """)
+
+        # เพิ่มคอลัมน์ใน records ที่อาจขาดหาย (backward compat)
+        existing = {row[1] for row in con.execute("PRAGMA table_info(records)").fetchall()}
+        new_cols = {
+            'p3_pos': 'TEXT', 'p3_pos_level': 'TEXT', 'p3_empid': 'TEXT',
+            'p3_dept': 'TEXT', 'p3_sec': 'TEXT', 'p3_org': 'TEXT',
+            'p3_announcement': 'TEXT',
+            'p4_work1_title': 'TEXT', 'p4_work1_year': 'TEXT',
+            'p4_work2_title': 'TEXT', 'p4_work2_year': 'TEXT',
+            'p4_work3_title': 'TEXT', 'p4_work3_year': 'TEXT',
+            'p4_concept_title': 'TEXT', 'p4_work_award': 'TEXT',
+            'p5_doc_received': 'TEXT', 'p5_work_result': 'TEXT',
+            'p5_work_score': 'TEXT', 'p5_work_eval_date': 'TEXT',
+            'eval51_rows': "TEXT NOT NULL DEFAULT '[]'",
+            'eval52_rows': "TEXT NOT NULL DEFAULT '[]'",
+            'p1_title':       "TEXT NOT NULL DEFAULT ''",
+            'p1_fname':       "TEXT NOT NULL DEFAULT ''",
+            'p1_lname':       "TEXT NOT NULL DEFAULT ''",
+            'p1_edu': 'TEXT', 'p1_edu_major': 'TEXT',
+            'p2_pos_current': "TEXT NOT NULL DEFAULT ''",
+            'p2_pos_level': 'TEXT',
+            'p2_empid':       "TEXT NOT NULL DEFAULT ''",
+            'p2_dept': 'TEXT', 'p2_sec': 'TEXT', 'p2_org': 'TEXT',
+        }
+        for col, ctype in new_cols.items():
+            if col not in existing:
+                con.execute(f'ALTER TABLE records ADD COLUMN {col} {ctype}')
+
+        con.commit()
 
 
 # ────────────────────────────────────────────────
@@ -514,9 +544,8 @@ def get_all():
         Response: JSON array ของทุก record (eval51_rows/eval52_rows ยังเป็น
                   JSON string ตามที่เก็บใน DB — frontend parse เอง)
     """
-    con = get_db()
-    rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
-    con.close()
+    with closing(get_db()) as con:
+        rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
 @app.route('/api/records/<int:rid>', methods=['GET'])
@@ -531,9 +560,8 @@ def get_one(rid):
         Response: JSON object ของ record นั้น (200)
                   หรือ {'error': 'not found'} (404) ถ้าไม่มี id นี้
     """
-    con = get_db()
-    row = con.execute('SELECT * FROM records WHERE id=?', [rid]).fetchone()
-    con.close()
+    with closing(get_db()) as con:
+        row = con.execute('SELECT * FROM records WHERE id=?', [rid]).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     return jsonify(row_to_dict(row))
@@ -574,15 +602,12 @@ def add_record():
         cur = con.execute(f'INSERT INTO records ({cols}) VALUES ({plh})', list(allowed.values()))
         con.commit()
         return jsonify({'id': cur.lastrowid, 'ok': True}), 201
-    except sqlite3.IntegrityError as e:
+    except sqlite3.IntegrityError:
         con.rollback()
-        return jsonify({'error': 'บันทึกไม่สำเร็จ (integrity): ' + str(e)}), 422
-    except sqlite3.OperationalError as e:
+        return fail('add_record integrity', 'บันทึกไม่สำเร็จ เนื่องจากข้อมูลขัดกับเงื่อนไขของระบบ', 422)
+    except Exception:
         con.rollback()
-        return jsonify({'error': 'DB error: ' + str(e)}), 500
-    except Exception as e:
-        con.rollback()
-        return jsonify({'error': 'เกิดข้อผิดพลาดที่ไม่คาดคิด: ' + str(e)}), 500
+        return fail('add_record', 'บันทึกข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
     finally:
         con.close()
 
@@ -625,12 +650,9 @@ def update_record(rid):
         if cur.rowcount == 0:
             return jsonify({'error': 'ไม่สามารถอัปเดตได้ (rowcount=0)'}), 422
         return jsonify({'ok': True})
-    except sqlite3.OperationalError as e:
+    except Exception:
         con.rollback()
-        return jsonify({'error': 'DB error: ' + str(e)}), 500
-    except Exception as e:
-        con.rollback()
-        return jsonify({'error': 'เกิดข้อผิดพลาดที่ไม่คาดคิด: ' + str(e)}), 500
+        return fail('update_record', 'แก้ไขข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
     finally:
         con.close()
 
@@ -667,9 +689,9 @@ def delete_record(rid):
         for p in paths:
             _safe_remove(p)
         return jsonify({'ok': True})
-    except Exception as e:
+    except Exception:
         con.rollback()
-        return jsonify({'error': 'ลบไม่สำเร็จ: ' + str(e)}), 500
+        return fail('delete_record', 'ลบข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
     finally:
         con.close()
 
@@ -695,9 +717,9 @@ def delete_all():
         for p in paths:
             _safe_remove(p)
         return jsonify({'ok': True})
-    except Exception as e:
+    except Exception:
         con.rollback()
-        return jsonify({'error': 'ลบไม่สำเร็จ: ' + str(e)}), 500
+        return fail('delete_all', 'ลบข้อมูลทั้งหมดไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
     finally:
         con.close()
 
@@ -722,12 +744,11 @@ def list_attachments(rid):
         Response: JSON array ของ metadata ไฟล์แนบ เรียงตาม book_no
                   (record ที่ไม่มีไฟล์จะได้ [] — ไม่ถือเป็น error)
     """
-    con = get_db()
-    rows = con.execute(
-        'SELECT id, record_id, book_no, filename, mime_type, file_size, uploaded_at '
-        'FROM attachments WHERE record_id=? ORDER BY book_no', [rid]
-    ).fetchall()
-    con.close()
+    with closing(get_db()) as con:
+        rows = con.execute(
+            'SELECT id, record_id, book_no, filename, mime_type, file_size, uploaded_at '
+            'FROM attachments WHERE record_id=? ORDER BY book_no', [rid]
+        ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
 @app.route('/api/records/<int:rid>/attachments', methods=['POST'])
@@ -823,8 +844,8 @@ def upload_attachment(rid):
         os.makedirs(UPLOAD_FOLDER, exist_ok=True)
         with open(file_path, 'wb') as fh:
             fh.write(file_bytes)
-    except Exception as e:
-        return jsonify({'error': 'ไม่สามารถบันทึกไฟล์ได้: ' + str(e)}), 500
+    except Exception:
+        return fail('upload_attachment write', 'บันทึกไฟล์ลงเครื่องไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
 
     mime = 'application/pdf'
     size = len(file_bytes)
@@ -858,10 +879,10 @@ def upload_attachment(rid):
         con.rollback()
         _safe_remove(file_path)
         return jsonify({'error': 'ไม่พบข้อมูล id=' + str(rid)}), 404
-    except Exception as e:
+    except Exception:
         con.rollback()
         _safe_remove(file_path)  # rollback ไฟล์ที่เพิ่งเขียน
-        return jsonify({'error': 'อัปโหลดล้มเหลว: ' + str(e)}), 500
+        return fail('upload_attachment', 'อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
     finally:
         con.close()
 
@@ -883,9 +904,8 @@ def download_attachment(att_id):
     Returns:
         Response: ไฟล์ PDF (200) หรือ JSON error (404)
     """
-    con = get_db()
-    row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
-    con.close()
+    with closing(get_db()) as con:
+        row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     fp = _stored_path(row['stored_name'])
@@ -909,9 +929,8 @@ def preview_attachment(att_id):
     Returns:
         Response: ไฟล์ PDF แสดง inline (200) หรือ JSON error (404)
     """
-    con = get_db()
-    row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
-    con.close()
+    with closing(get_db()) as con:
+        row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     fp = _stored_path(row['stored_name'])
@@ -944,9 +963,9 @@ def delete_attachment(att_id):
         # ลบไฟล์หลัง commit ด้วยเหตุผลเดียวกับ delete_record
         _safe_remove(path)
         return jsonify({'ok': True})
-    except Exception as e:
+    except Exception:
         con.rollback()
-        return jsonify({'error': 'ลบไฟล์ล้มเหลว: ' + str(e)}), 500
+        return fail('delete_attachment', 'ลบไฟล์แนบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
     finally:
         con.close()
 
@@ -958,17 +977,21 @@ def delete_attachment(att_id):
 # เพราะ frontend เรียกผ่าน fetch() และคาดหวัง response.json() เสมอ
 # (ถ้าปล่อยเป็น HTML ฝั่ง JS จะ parse พังและผู้ใช้เห็น error ที่อ่านไม่รู้เรื่อง)
 
+# ไม่ใช้ str(e) เหมือนข้อ 9 — ของ Werkzeug เป็น boilerplate อังกฤษยาวเกิน 80 ตัวอักษร
+# ซึ่ง toastError เปิด alert() ให้ และไม่ได้บอกผู้ใช้ว่าต้องทำอะไรต่อ
+# ไม่ต้อง log ซ้ำที่นี่: exception ที่ไม่มีใครจับ Flask log ให้เองทาง app.logger
+
 @app.errorhandler(400)
 def bad_request(e):
-    return jsonify({'error': 'Bad Request: ' + str(e)}), 400
+    return jsonify({'error': 'คำขอไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง'}), 400
 
 @app.errorhandler(404)
 def not_found(e):
-    return jsonify({'error': 'Not Found: ' + str(e)}), 404
+    return jsonify({'error': 'ไม่พบรายการที่เรียก'}), 404
 
 @app.errorhandler(500)
 def internal_error(e):
-    return jsonify({'error': 'Internal Server Error: ' + str(e)}), 500
+    return jsonify({'error': 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง'}), 500
 
 @app.errorhandler(413)
 def request_too_large(e):
@@ -998,16 +1021,15 @@ def stats():
             'by_level':  [{level, cnt}, ...]   แยกตามระดับตำแหน่งปัจจุบัน
         }
     """
-    con = get_db()
-    total  = con.execute('SELECT COUNT(*) FROM records').fetchone()[0]
-    passed = con.execute("SELECT COUNT(*) FROM records WHERE p5_work_result='ผ่าน'").fetchone()[0]
-    by_result = con.execute(
-        'SELECT p5_work_result as result, COUNT(*) as cnt FROM records GROUP BY p5_work_result'
-    ).fetchall()
-    by_level = con.execute(
-        'SELECT p2_pos_level as level, COUNT(*) as cnt FROM records GROUP BY p2_pos_level'
-    ).fetchall()
-    con.close()
+    with closing(get_db()) as con:
+        total  = con.execute('SELECT COUNT(*) FROM records').fetchone()[0]
+        passed = con.execute("SELECT COUNT(*) FROM records WHERE p5_work_result='ผ่าน'").fetchone()[0]
+        by_result = con.execute(
+            'SELECT p5_work_result as result, COUNT(*) as cnt FROM records GROUP BY p5_work_result'
+        ).fetchall()
+        by_level = con.execute(
+            'SELECT p2_pos_level as level, COUNT(*) as cnt FROM records GROUP BY p2_pos_level'
+        ).fetchall()
     return jsonify({'total': total, 'passed': passed,
                     'by_result': [dict(r) for r in by_result],
                     'by_level':  [dict(r) for r in by_level]})
@@ -1031,9 +1053,8 @@ def export_csv_server():
                   หรือ 204 No Content ถ้ายังไม่มีข้อมูลเลย
     """
     import csv, io as _io
-    con  = get_db()
-    rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
-    con.close()
+    with closing(get_db()) as con:
+        rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
     if not rows:
         return '', 204
     buf = _io.StringIO()
@@ -1050,6 +1071,34 @@ def export_csv_server():
 # ────────────────────────────────────────────────
 
 PORT = 5000
+
+def _setup_logging():
+    """
+    ตั้ง log ไฟล์ไว้ข้างตัวโปรแกรม (BASE_DIR/hr_promotion.log) หมุนไฟล์ที่ 1 MB เก็บ 3 รุ่น
+
+    เรียกจาก `main()` เท่านั้น ไม่ใช่ตอน import module — เพราะ test import app.py
+    ถ้าตั้ง handler ตอน import ทุกครั้งที่รัน test จะมีไฟล์ log งอกในโฟลเดอร์โปรเจกต์
+    (ตอน test ไม่มี handler ข้อความระดับ ERROR จะไปออก stderr ตาม lastResort ของ
+    logging ซึ่ง pytest เก็บให้อยู่แล้ว)
+
+    ต่อ handler เข้าทั้ง log ของเรา (จาก fail()) และ app.logger ของ Flask (traceback
+    ของ exception ที่ไม่มีใครจับ) ไม่อย่างนั้นฝั่งหลังจะหายไปกับ stderr ซึ่งโหมด
+    windowed ของ .exe ไม่มีให้เขียน
+
+    ไฟล์ log เป็นที่เดียวที่ยังมีรายละเอียด exception เต็ม ๆ หลังข้อ 9 ตัด str(e)
+    ออกจาก response — เวลาผู้ใช้แจ้งปัญหา ให้ขอไฟล์นี้
+
+    Returns:
+        None
+    """
+    handler = RotatingFileHandler(
+        os.path.join(BASE_DIR, 'hr_promotion.log'),
+        maxBytes=1024 * 1024, backupCount=3, encoding='utf-8',
+    )
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
+    for target in (log, app.logger):
+        target.addHandler(handler)
+        target.setLevel(logging.INFO)
 
 def run_flask():
     """
@@ -1085,6 +1134,7 @@ def main():
     Returns:
         None
     """
+    _setup_logging()
     init_db()
     if HAS_WEBVIEW:
         t = threading.Thread(target=run_flask, daemon=True)

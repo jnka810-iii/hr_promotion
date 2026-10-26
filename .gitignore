@@ -16,3 +16,6 @@ venv/
 dist/
 build/
 *.spec
+
+# Log ของแอป (ข้อ 9) — มี path และ traceback ของเครื่องผู้ใช้
+hr_promotion.log*

@@ -362,7 +362,7 @@ rows = con.execute(
 ).fetchall()
 ```
 
-### 9. ส่ง `str(e)` ดิบกลับให้ client ใน 8 จุด
+### 9. ส่ง `str(e)` ดิบกลับให้ client ใน 8 จุด — **แก้แล้ว 26/10/2026**
 
 - **Severity:** Important
 - **Location:** `app.py` ใน `add_record` (`:508`, `:511`, `:514`), `update_record` (`:559`, `:562`),
@@ -434,7 +434,7 @@ if not file_bytes.startswith(b'%PDF-'):
     return jsonify({'error': 'ไฟล์ไม่ใช่ PDF ที่ถูกต้อง'}), 400
 ```
 
-### 11. GET route 7 ตัวไม่มี try/finally connection รั่วเมื่อ query พัง
+### 11. GET route 7 ตัวไม่มี try/finally connection รั่วเมื่อ query พัง — **แก้แล้ว 26/10/2026 (เหตุผลในข้อนี้ผิดบางส่วน ดูท้ายไฟล์)**
 
 - **Severity:** Important
 - **Location:** `app.py:448` (`get_all`), `:465` (`get_one`), `:652` (`list_attachments`), `:768` (`download_attachment`),
@@ -781,6 +781,24 @@ def test_upload_to_missing_record_404(client):  # กันข้อ 19
 จุด XSS จริงมีสองจุดคือ `renderTable` (`:1363`) กับ `printReport` (`:1144`) ตามข้อ 3 ข้างต้น
 ความรุนแรงยังเป็น Critical เท่าเดิม เพราะ `printReport` ครอบฟิลด์มากกว่าที่รีวิวเดิมระบุ
 รวมถึงค่าในแถวประเมิน 5.1 และ 5.2 ที่ server ไม่ได้ตรวจเนื้อหาภายใน list
+
+---
+
+## ข้อแก้ไขจากรีวิวนี้ (26/10/2026) — ข้อ 9 และ ข้อ 11
+
+ทั้งสองข้อแก้แล้ว รายละเอียดการแก้อยู่ใน [spec.md](spec.md) ส่วนนี้บันทึกเฉพาะจุดที่
+**การตรวจจริงไม่ตรงกับที่รีวิวเขียนไว้** เพื่อไม่ให้รอบหน้าเชื่อข้อสรุปที่พิสูจน์แล้วว่าไม่จริง
+
+- **ข้อ 11 ส่วน "Why it matters" ผิด** รีวิวเขียนว่า connection ที่ค้างในโหมด WAL จะ hold shared
+  lock ทำให้ checkpoint ทำไม่ได้และไฟล์ `-wal` โตไม่หยุด วัดตรงด้วย `PRAGMA wal_checkpoint(TRUNCATE)`
+  ผ่าน HTTP จริงทั้งก่อนและหลังแก้ ได้ `busy=0` ทั้งสองกรณี checkpoint ไม่ถูกบล็อกเลย
+  เพราะ connection ที่เปิดค้างอยู่เฉย ๆ ไม่ได้ถือ read transaction ไว้ SQLite จึงไม่ติด lock
+  ผลกระทบที่วัดได้จริงคือ **handle ของไฟล์ DB ค้างเปิดค้างอยู่หนึ่งตัวต่อ GET ที่ล้มหนึ่งครั้ง**
+  จนกว่า cycle collector จะเก็บ (traceback ถือ frame ของ route ไว้ ซึ่งถือ local `con` ต่อ)
+  ตัวข้อบกพร่องยังเป็นของจริงและยังควรแก้ แต่เหตุผลคือ handle รั่ว ไม่ใช่ `-wal` บวม
+- **ข้อ 9 ขอบเขตกว้างกว่า 8 จุดที่ระบุ** `@app.errorhandler(400/404/500)` ก็ต่อ `str(e)` แบบเดียวกัน
+  ของพวกนี้ไม่ได้เปิดเผยรายละเอียดภายใน (เป็น boilerplate ของ Werkzeug) แต่ยาวเกิน 80 ตัวอักษร
+  จึงเปิด `alert()` ด้วยข้อความอังกฤษที่ผู้ใช้ทำอะไรต่อไม่ได้ แก้รวมไปในรอบนี้แล้ว
 
 ---
 

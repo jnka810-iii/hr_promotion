@@ -137,6 +137,30 @@ def row_to_dict(row):
     """
     return dict(row)
 
+def csv_cell(value) -> str:
+    """
+    ทำให้ค่าหนึ่ง cell ปลอดภัยพอจะเปิดใน Excel โดยไม่ถูกตีความเป็นสูตร
+
+    Excel อ่าน cell ที่ขึ้นต้นด้วย = + - @ tab หรือ CR เป็นสูตรและรันทันทีที่เปิดไฟล์
+    การครอบด้วย " ตามกฎ CSV ไม่ช่วย เพราะ Excel ถอดเครื่องหมายคำพูดออกก่อนแล้วค่อยประเมิน
+    วิธีมาตรฐานคือนำหน้าด้วย single quote ซึ่ง Excel อ่านเป็น "บังคับให้เป็นข้อความ"
+    และไม่แสดงตัว quote นั้นใน cell
+
+    ตัวนี้ต้องอยู่ตรงจุด export ไม่ใช่ฝากไว้กับ `.strip()` ขาเข้าของ sanitize_record
+    เพราะ export อ่านจาก DB ตรง ๆ และ DB แก้ด้วยมือผ่าน fix_db.py ได้
+
+    ฝั่ง client มีสำเนาตรรกะเดียวกันใน `exportAllCSV` (templates/index.html)
+    แก้ที่นี่แล้วต้องแก้ที่นั่นด้วย ไม่อย่างนั้นไฟล์ที่ได้จากสองปุ่มจะไม่เหมือนกัน
+
+    Parameters:
+        value: ค่าดิบจาก DB (None ถือเป็นค่าว่าง)
+
+    Returns:
+        str: ค่าที่ Excel จะแสดงเป็นข้อความเสมอ
+    """
+    text = '' if value is None else str(value)
+    return "'" + text if text[:1] in ('=', '+', '-', '@', '\t', '\r') else text
+
 def _safe_remove(path: str):
     """
     ลบไฟล์บนดิสก์แบบ "best-effort" — ไม่ raise exception ไม่ว่ากรณีใด
@@ -1060,9 +1084,12 @@ def export_csv_server():
     buf = _io.StringIO()
     w   = csv.DictWriter(buf, fieldnames=rows[0].keys())
     w.writeheader()
-    w.writerows([dict(r) for r in rows])
+    w.writerows([{k: csv_cell(v) for k, v in dict(r).items()} for r in rows])
     from flask import Response
-    return Response('﻿' + buf.getvalue(), mimetype='text/csv; charset=utf-8-sig',
+    # mimetype ต้องไม่มี parameter ติดมาด้วย — Werkzeug เติม charset ของตัวเองต่อท้ายเสมอ
+    # ใส่มาเองจะได้ charset สองตัวในหัวเดียว ('text/csv; charset=X; charset=utf-8')
+    # ซึ่ง client ที่อ่านตัวแรกจะเจอค่าที่ไม่รู้จักแล้ว fallback ไป encoding อื่น
+    return Response('﻿' + buf.getvalue(), mimetype='text/csv',
                     headers={'Content-Disposition': f'attachment; filename=hr_promotion_{dstr()}.csv'})
 
 

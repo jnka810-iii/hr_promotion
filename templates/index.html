@@ -26,6 +26,7 @@ body{background:var(--bg);font-family:'Sarabun','Segoe UI',sans-serif;font-size:
 .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
 .dg{background:#22c55e;box-shadow:0 0 0 2px rgba(34,197,94,.3)}
 .dy{background:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.3)}
+.dr{background:#dc3545;box-shadow:0 0 0 2px rgba(220,53,69,.3)}
 .tnav{background:#fff;border-bottom:2px solid #dde3ef;padding:0 16px;position:sticky;top:0;
       z-index:100;box-shadow:0 2px 6px rgba(0,0,0,.07);display:flex;gap:2px;overflow-x:auto}
 .tbtn{border:none;background:none;padding:11px 18px;font-family:'Sarabun',sans-serif;font-size:.9rem;
@@ -119,8 +120,8 @@ textarea.form-control{resize:vertical}
   <div class="sb">
     <div class="row g-3">
       <div class="col-6 col-md-2">
-        <label class="form-label required">คำนำหน้า</label>
-        <select class="form-select" id="p1_title" required>
+        <label class="form-label">คำนำหน้า</label>
+        <select class="form-select" id="p1_title">
           <option value="">-- เลือก --</option>
           <option>นาย</option><option>นาง</option><option>นางสาว</option>
           <option>ว่าที่ร้อยตรี</option><option>ร้อยตำรวจตรี</option>
@@ -128,12 +129,12 @@ textarea.form-control{resize:vertical}
         </select>
       </div>
       <div class="col-12 col-md-4">
-        <label class="form-label required">ชื่อ</label>
-        <input type="text" class="form-control" id="p1_fname" required placeholder="ชื่อจริง">
+        <label class="form-label">ชื่อ</label>
+        <input type="text" class="form-control" id="p1_fname" placeholder="ชื่อจริง">
       </div>
       <div class="col-12 col-md-4">
-        <label class="form-label required">นามสกุล</label>
-        <input type="text" class="form-control" id="p1_lname" required placeholder="นามสกุล">
+        <label class="form-label">นามสกุล</label>
+        <input type="text" class="form-control" id="p1_lname" placeholder="นามสกุล">
       </div>
       <div class="col-12 col-md-4">
         <label class="form-label">วุฒิการศึกษาสูงสุดที่เกี่ยวข้อง</label>
@@ -154,28 +155,28 @@ textarea.form-control{resize:vertical}
   <div class="sb">
     <div class="row g-3">
       <div class="col-12 col-md-4">
-        <label class="form-label required">ตำแหน่งปัจจุบัน</label>
-        <input type="text" class="form-control" id="p2_pos_current" required placeholder="เช่น นักวิเคราะห์นโยบายและแผน">
+        <label class="form-label">ตำแหน่งปัจจุบัน</label>
+        <input type="text" class="form-control" id="p2_pos_current" placeholder="เช่น นักวิเคราะห์นโยบายและแผน">
       </div>
       <div class="col-12 col-md-3">
-        <label class="form-label required">ระดับตำแหน่งปัจจุบัน</label>
-        <select class="form-select" id="p2_pos_level" required>
+        <label class="form-label">ระดับตำแหน่งปัจจุบัน</label>
+        <select class="form-select" id="p2_pos_level">
           <option value="">-- เลือก --</option>
           <option>ปฏิบัติการ</option><option>ชำนาญการ</option>
           <option>ชำนาญการพิเศษ</option><option>เชี่ยวชาญ</option><option>ทรงคุณวุฒิ<option>อำนวยการระดับต้น<option>อำนวยการระดับสูง</option>
         </select>
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label required">ตำแหน่งเลขที่</label>
-        <input type="text" class="form-control" id="p2_empid" required>
+        <label class="form-label">ตำแหน่งเลขที่</label>
+        <input type="text" class="form-control" id="p2_empid">
       </div>
       <div class="col-12 col-md-4">
-        <label class="form-label required">กลุ่มงาน</label>
-        <input type="text" class="form-control" id="p2_dept" required placeholder="เช่น กลุ่มสรรหาและข้อมูลบุคคล">
+        <label class="form-label">กลุ่มงาน</label>
+        <input type="text" class="form-control" id="p2_dept" placeholder="เช่น กลุ่มสรรหาและข้อมูลบุคคล">
       </div>
       <div class="col-12 col-md-4">
-        <label class="form-label required">สำนัก/กอง/ศูนย์</label>
-        <input type="text" class="form-control" id="p2_sec" required placeholder="เช่น กองการเจ้าหน้าที่">
+        <label class="form-label">สำนัก/กอง/ศูนย์</label>
+        <input type="text" class="form-control" id="p2_sec" placeholder="เช่น กองการเจ้าหน้าที่">
       </div>
       <div class="col-12 col-md-4">
         <label class="form-label">กรม / หน่วยงาน</label>
@@ -194,20 +195,20 @@ textarea.form-control{resize:vertical}
   <div class="sb">
     <div class="row g-3">
       <div class="col-12 col-md-4">
-        <label class="form-label required">ตำแหน่งที่ได้รับเลือก</label>
-        <input type="text" class="form-control" id="p3_pos" required placeholder="เช่น นักวิเคราะห์นโยบายและแผน">
+        <label class="form-label">ตำแหน่งที่ได้รับเลือก</label>
+        <input type="text" class="form-control" id="p3_pos" placeholder="เช่น นักวิเคราะห์นโยบายและแผน">
       </div>
       <div class="col-12 col-md-3">
-        <label class="form-label required">ระดับตำแหน่ง</label>
-        <select class="form-select" id="p3_pos_level" required>
+        <label class="form-label">ระดับตำแหน่ง</label>
+        <select class="form-select" id="p3_pos_level">
           <option value="">-- เลือก --</option>
           <option>ปฏิบัติการ</option><option>ชำนาญการ</option>
           <option>ชำนาญการพิเศษ</option><option>เชี่ยวชาญ</option><option>ทรงคุณวุฒิ</option>
         </select>
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label required">ตำแหน่งเลขที่</label>
-        <input type="text" class="form-control" id="p3_empid" required>
+        <label class="form-label">ตำแหน่งเลขที่</label>
+        <input type="text" class="form-control" id="p3_empid">
       </div>
       <div class="col-12 col-md-4">
         <label class="form-label">กลุ่มงาน</label>
@@ -238,12 +239,12 @@ textarea.form-control{resize:vertical}
           <div class="col-12 col-md-7">
             <div class="upload-zone" id="uzone-ann"
                  onclick="document.getElementById('file-inp-ann').click()"
-                 ondragover="event.preventDefault()" ondrop="handleDropAnn(event)">
+                 ondragover="event.preventDefault()" ondrop="handleDrop(event,'ann')">
               <i class="fa fa-cloud-upload-alt fa-lg text-primary mb-1 d-block"></i>
               <div class="fw-bold text-primary" id="uzone-lbl-ann" style="font-size:.85rem">คลิกหรือลากไฟล์ PDF มาวางที่นี่</div>
               <div class="text-muted" style="font-size:.75rem">รองรับ .pdf เท่านั้น (ขนาดไม่เกิน 100 MB)</div>
               <input type="file" id="file-inp-ann" style="display:none" accept=".pdf"
-                     onchange="handleFileSelectAnn(this.files[0])">
+                     onchange="handleFileSelect(this.files[0],'ann')">
             </div>
             <div class="progress-wrap" id="prog-wrap-ann">
               <div class="progress-bar-inner" id="prog-bar-ann" style="width:0%"></div>
@@ -257,15 +258,15 @@ textarea.form-control{resize:vertical}
                 </div>
                 <span id="upload-status-ann" class="badge bg-secondary ms-1" style="font-size:.72rem">ยังไม่มีไฟล์</span>
                 <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2"
-                        onclick="clearFileAnn()" title="ลบไฟล์"><i class="fa fa-times"></i></button>
+                        onclick="clearFile('ann')" title="ลบไฟล์"><i class="fa fa-times"></i></button>
               </div>
             </div>
           </div>
           <div class="col-12 col-md-5 d-flex flex-column gap-2">
-            <button type="button" class="btn btn-danger btn-sm" onclick="downloadFileAnn()">
+            <button type="button" class="btn btn-danger btn-sm" onclick="downloadFile('ann')">
               <i class="fa fa-download me-2"></i>Download PDF ประกาศ
             </button>
-            <button type="button" class="btn btn-outline-primary btn-sm" onclick="previewFileAnn()">
+            <button type="button" class="btn btn-outline-primary btn-sm" onclick="previewFile('ann')">
               <i class="fa fa-eye me-2"></i>ดูตัวอย่าง PDF
             </button>
           </div>
@@ -280,8 +281,8 @@ textarea.form-control{resize:vertical}
     <div class="ssb">
       <div class="row g-3">
         <div class="col-12 col-md-7">
-          <label class="form-label required">ผลงานที่ผ่านมาเรื่องที่ 1</label>
-          <input type="text" class="form-control" id="p4_work1_title" required placeholder="ชื่อผลงานหลัก เรื่องที่ 1">
+          <label class="form-label">ผลงานที่ผ่านมาเรื่องที่ 1</label>
+          <input type="text" class="form-control" id="p4_work1_title" placeholder="ชื่อผลงานหลัก เรื่องที่ 1">
         </div>
         <div class="col-6 col-md-2">
           <label class="form-label">ปีที่จัดทำ (พ.ศ.)</label>
@@ -309,8 +310,8 @@ textarea.form-control{resize:vertical}
     <div class="ssb">
       <div class="row g-3">
         <div class="col-12 col-md-8">
-          <label class="form-label required">เรื่องที่เป็นข้อเสนอแนวคิด</label>
-          <input type="text" class="form-control" id="p4_concept_title" required placeholder="ชื่อข้อเสนอแนวคิด / นวัตกรรม">
+          <label class="form-label">เรื่องที่เป็นข้อเสนอแนวคิด</label>
+          <input type="text" class="form-control" id="p4_concept_title" placeholder="ชื่อข้อเสนอแนวคิด / นวัตกรรม">
         </div>
         <div class="col-12 col-md-4">
           <label class="form-label">รางวัลหรือผลลัพธ์ที่ได้รับ</label>
@@ -501,6 +502,11 @@ textarea.form-control{resize:vertical}
 </template>
 
 <script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
+
+<!-- กฎฟิลด์บังคับจาก app.py (REQUIRED_FIELDS) — ดอกจัน การตรวจของ browser
+     และการตรวจก่อน submit อ่านจากก้อนนี้ก้อนเดียว ไม่มีสำเนาอยู่ใน markup -->
+<script type="application/json" id="required-fields">{{ required_fields|tojson }}</script>
+
 <script>
 'use strict';
 /* ================================================================
@@ -529,6 +535,17 @@ const SF = [
   'p4_work3_title','p4_work3_year','p4_concept_title','p4_work_award',
   'p5_doc_received','p5_work_result','p5_work_score','p5_work_eval_date',
 ];
+
+// REQUIRED_FIELDS: กฎฟิลด์บังคับที่ server ฝังมากับหน้านี้ เป็น list ของคู่
+// [ชื่อคอลัมน์, ป้ายภาษาไทย] เรียงตามลำดับช่องในฟอร์ม (ดู REQUIRED_FIELDS ใน app.py
+// ซึ่งเป็นต้นฉบับเดียวของกฎนี้ — เหตุผลที่เป็น list ไม่ใช่ object อยู่ที่ docstring ของ index())
+// อ่านจาก <script type="application/json"> ไม่ใช่ประกาศค่าลงไปตรง ๆ เพราะถ้าไฟล์นี้
+// ถูกเปิดโดยไม่ผ่าน Flask ตัว placeholder ของ Jinja จะไม่ถูกแทนค่า การประกาศตรง ๆ จะเป็น SyntaxError
+// ที่ฆ่าทั้ง <script> ทิ้ง ขณะที่ JSON.parse ที่พังแค่คืน [] แล้วหน้าเว็บยังกรอกข้อมูลต่อได้
+const REQUIRED_FIELDS = (()=>{
+  try{ return JSON.parse(document.getElementById('required-fields').textContent); }
+  catch{ console.warn('ไม่พบรายการฟิลด์บังคับจาก server — ฟอร์มจะไม่ตรวจฝั่ง client'); return []; }
+})();
 
 // สถานะไฟล์แนบ — แยก 2 มิติ: "ไฟล์ที่ผู้ใช้เพิ่งเลือก" กับ "ไฟล์ที่อยู่บน server แล้ว"
 // key ของทั้งคู่คือช่องไฟล์: 1,2,3 (เล่มผลงาน) หรือ 'ann' (ไฟล์ประกาศ)
@@ -595,7 +612,9 @@ async function apiFetch(path, method='GET', body=null){
     USE_FLASK = true;
     b.innerHTML = '<span class="dot dg"></span>Flask + SQLite ✓';
   } catch {
-    b.innerHTML = '<span class="dot dg"></span>LocalStorage (Offline)';
+    // แดง ไม่ใช่เขียว: โหมดนี้ไฟล์แนบใช้ไม่ได้และข้อมูลอยู่แค่ใน browser ของเครื่องนี้
+    // badge มีหน้าที่เดียวคือบอกว่ากำลังอยู่โหมดไหน ใช้สีเดียวกับโหมดปกติก็เท่ากับไม่ได้บอก
+    b.innerHTML = '<span class="dot dr"></span>LocalStorage (Offline)';
   }
   await loadAll();
 })();
@@ -776,9 +795,26 @@ function getEval52Data(){
  *     └─ ถ้าเป็น record ใหม่ (ยังไม่มี id)       → ค้างสถานะ "รอบันทึก"
  *        แล้วให้ submit handler อัปโหลดตามหลังจาก INSERT สำเร็จและได้ id มา
  *
- * หมายเหตุ: ฟังก์ชันชุด *Ann เป็นเวอร์ชันคู่ขนานของช่องไฟล์ประกาศ
- * (element id ลงท้าย -ann และ book_no='ann') — logic เหมือนชุดเล่ม 1-3 ทุกจุด
+ * ทั้งสี่ช่อง (เล่ม 1-3 และประกาศ) ใช้ฟังก์ชันชุดเดียวกัน ความต่างทั้งหมด
+ * อยู่ในตาราง SLOTS ข้างล่าง ไม่ได้อยู่ในตัวฟังก์ชัน
  * ================================================================ */
+
+/* ── SLOTS — ตารางช่องไฟล์แนบ ──────────────────────────────────────
+ * key ตรงกับ book_no ที่ server รับ (BOOK_SLOTS ใน app.py) และตรงกับ suffix
+ * ของ element id ทุกตัว (uzone-1, uzone-ann, prog-bar-ann ฯลฯ)
+ *
+ * label  ใช้นำหน้าข้อความ เช่น `เล่ม 1: ไฟล์ใหญ่เกินไป`
+ * title  ใช้ต่อหลังคำว่า "ไฟล์" เช่น `ยังไม่มีไฟล์เล่มที่ 1`
+ * margin badge ของประกาศอยู่ในการ์ดข้อมูลไฟล์ จึงเว้นซ้าย 4px ส่วนของเล่ม 1-3
+ *        อยู่ในแถวหัวข้อ เว้น 16px — ค่านี้วัดจาก computed style ไม่ใช่เดา
+ *        รวมสองช่องนี้เป็น margin เดียวกันคือ badge ประกาศขยับ 12px
+ * ──────────────────────────────────────────────────────────────── */
+const SLOTS = {
+  1:   { label: 'เล่ม 1', title: 'เล่มที่ 1', margin: 'ms-3' },
+  2:   { label: 'เล่ม 2', title: 'เล่มที่ 2', margin: 'ms-3' },
+  3:   { label: 'เล่ม 3', title: 'เล่มที่ 3', margin: 'ms-3' },
+  ann: { label: 'ประกาศ', title: 'ประกาศ',    margin: 'ms-1' },
+};
 
 /**
  * buildFilePanels — สร้าง UI ช่องอัปโหลดเล่มผลงานทั้ง 3 เล่มตอนโหลดหน้า
@@ -839,19 +875,19 @@ function buildFilePanels(){
 }
 
 /**
- * setUploadStatus — อัปเดต badge สถานะไฟล์ของเล่มที่ n
- * @param {number|string} n   เลขเล่ม (1-3)
+ * setUploadStatus — อัปเดต badge สถานะไฟล์ของช่อง n
+ * @param {number|string} n   คีย์ช่องไฟล์: 1, 2, 3 หรือ 'ann'
  * @param {string} text       ข้อความสถานะ เช่น 'กำลังอัปโหลด...'
  * @param {string} [cls]      ชื่อสี Bootstrap: secondary/warning/success/danger
  * @returns {undefined}
  */
 function setUploadStatus(n,text,cls='secondary'){
   const el=document.getElementById('upload-status-'+n);
-  el.textContent=text; el.className=`ms-3 badge bg-${cls}`;
+  el.textContent=text; el.className=`${SLOTS[n].margin} badge bg-${cls}`;
 }
 /**
- * showFileUI — แสดงชื่อ+ขนาดไฟล์ที่เลือกในการ์ดข้อมูลไฟล์ของเล่มที่ n
- * @param {number|string} n  เลขเล่ม
+ * showFileUI — แสดงชื่อ+ขนาดไฟล์ที่เลือกในการ์ดข้อมูลไฟล์ของช่อง n
+ * @param {number|string} n  คีย์ช่องไฟล์
  * @param {string} name      ชื่อไฟล์ต้นฉบับ
  * @param {number} size      ขนาดไฟล์ (bytes) — แสดงผลเป็น KB
  * @returns {undefined}
@@ -908,8 +944,10 @@ function handleDrop(ev,n){ ev.preventDefault(); const file=ev.dataTransfer.files
  * อ่านเป็น base64 ด้วย FileReader ทำให้ไฟล์ 100 MB กิน RAM หลายร้อย MB พร้อมกัน
  * ทั้งฝั่ง browser และฝั่ง server และเป็นเหตุให้ต้องตั้ง MAX_CONTENT_LENGTH สูงถึง 200 MB
  *
- * ถ้าฟอร์มกำลังแก้ไข record เดิม (มี rec-id และเป็นโหมด Flask) → อัปโหลดทันที
- * ไม่งั้นค้างสถานะ "รอบันทึกข้อมูล" เพราะยังไม่มี record id ให้ผูกไฟล์
+ * ปลายทางของไฟล์มี 3 ทางตามโหมดและสถานะฟอร์ม:
+ *   โหมด LocalStorage → เตือนทันทีว่าโหมดนี้เก็บไฟล์ไม่ได้ (ไม่มีที่เก็บให้เลย)
+ *   โหมด Flask + กำลังแก้ไข record เดิม (มี rec-id) → อัปโหลดทันที
+ *   โหมด Flask + record ใหม่ → ค้างสถานะ "รอบันทึกข้อมูล" รอ id จากตอน submit
  * @param {File} file        ไฟล์ที่ผ่านการตรวจแล้ว
  * @param {number|string} n  เลขเล่ม
  * @returns {Promise<void>}
@@ -917,8 +955,17 @@ function handleDrop(ev,n){ ev.preventDefault(); const file=ev.dataTransfer.files
 async function _cacheFile(file,n){
   fileCache[n]={file,name:file.name,size:file.size};
   showFileUI(n,file.name,file.size);
+  if(!USE_FLASK){
+    // โหมด LocalStorage ไม่มีที่เก็บไฟล์เลย: fileCache อยู่ใน memory ของหน้านี้
+    // เท่านั้น ปิดหน้าต่างแล้วหาย ต้องบอกตรงนี้ ไม่ใช่ขึ้น "รอบันทึกข้อมูล"
+    // แบบโหมด Flask ซึ่งทำให้ผู้ใช้เข้าใจว่าแนบสำเร็จแล้วรอ save เฉย ๆ
+    showProgress(n,100);
+    setUploadStatus(n,'⚠ โหมดนี้ไม่เก็บไฟล์','danger');
+    toast('โหมด Offline เก็บไฟล์แนบไม่ได้ ไฟล์จะหายเมื่อปิดโปรแกรม','#dc3545');
+    return;
+  }
   const rid=document.getElementById('rec-id').value;
-  if(!(rid&&USE_FLASK)){
+  if(!rid){
     showProgress(n,100); setUploadStatus(n,'⏳ รอบันทึกข้อมูล','warning'); return;
   }
   const zone=document.getElementById('uzone-'+n);
@@ -974,8 +1021,8 @@ async function _uploadToFlask(n,rid){
     // server ตรวจเนื้อหาไฟล์เองด้วย (ไม่ใช่ PDF จริง / เกิน 100 MB / ไม่พบ record)
     // ด่านฝั่งนี้ดูแค่นามสกุลกับขนาด ไฟล์ที่ตั้งชื่อ .pdf แต่ข้างในไม่ใช่จะผ่านมาถึง server
     // จึงต้องโชว์เหตุผลจาก server ไม่ใช่แค่ 'ล้มเหลว' ลอย ๆ ที่ผู้ใช้เดาต่อไม่ได้
-    toast(`เล่ม ${n}: ${err.message}`,'#dc3545');
-    console.error(`[Upload เล่ม ${n}]`,err.message); return false;
+    toast(`${SLOTS[n].label}: ${err.message}`,'#dc3545');
+    console.error(`[Upload ${SLOTS[n].label}]`,err.message); return false;
   }
 }
 
@@ -998,7 +1045,7 @@ async function clearFile(n){
   zone.classList.remove('has-file','uploading');
   document.getElementById('uzone-lbl-'+n).textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
   setUploadStatus(n,'ยังไม่มีไฟล์','secondary'); showProgress(n,100);
-  toast(`ลบไฟล์เล่มที่ ${n} เรียบร้อย`,'#6c757d');
+  toast(`ลบไฟล์${SLOTS[n].title} เรียบร้อย`,'#6c757d');
 }
 
 /**
@@ -1011,7 +1058,7 @@ async function clearFile(n){
 async function downloadFile(n){
   if(USE_FLASK&&uploadedMeta[n]?.att_id){ window.open(`/api/attachments/${uploadedMeta[n].att_id}`,'_blank'); return; }
   if(fileCache[n]?.file){ _openLocal(fileCache[n],true); return; }
-  toast('ยังไม่มีไฟล์เล่มที่ '+n,'#dc3545');
+  toast('ยังไม่มีไฟล์'+SLOTS[n].title,'#dc3545');
 }
 /**
  * previewFile — เปิดดู PDF เล่มที่ n ในแท็บใหม่ (ใช้ endpoint /preview
@@ -1022,98 +1069,16 @@ async function downloadFile(n){
 async function previewFile(n){
   if(USE_FLASK&&uploadedMeta[n]?.att_id){ window.open(`/api/attachments/${uploadedMeta[n].att_id}/preview`,'_blank'); return; }
   if(fileCache[n]?.file){ _openLocal(fileCache[n],false); return; }
-  toast('ยังไม่มีไฟล์เล่มที่ '+n,'#dc3545');
-}
-
-/* ── ชุดฟังก์ชันไฟล์ประกาศ (*Ann) ─────────────────────────────────
- * mirror ของชุดเล่ม 1-3 ทุกฟังก์ชัน (handleFileSelect → handleFileSelectAnn,
- * _uploadToFlask → _uploadToFlaskAnn ฯลฯ) ต่างกันเพียง:
- * - element id ใช้ suffix '-ann' แทนเลขเล่ม
- * - book_no ที่ส่งขึ้น server เป็น string 'ann'
- * ดูคำอธิบาย logic ละเอียดที่ฟังก์ชันต้นแบบชุดเล่ม 1-3 ด้านบน
- * ──────────────────────────────────────────────────────────────── */
-function handleFileSelectAnn(file){
-  if(!file) return;
-  if(!file.name.toLowerCase().endsWith('.pdf')) return toast('รองรับเฉพาะไฟล์ PDF เท่านั้น','#dc3545');
-  if(file.size>100*1024*1024) return toast('ไฟล์ใหญ่เกิน 100 MB','#dc3545');
-  _cacheFileAnn(file);
-}
-function handleDropAnn(ev){ ev.preventDefault(); const file=ev.dataTransfer.files[0]; if(file) handleFileSelectAnn(file); }
-
-async function _cacheFileAnn(file){
-  fileCache['ann']={file,name:file.name,size:file.size};
-  showFileUIAnn(file.name,file.size);
-  const rid=document.getElementById('rec-id').value;
-  if(!(rid&&USE_FLASK)){
-    showProgressAnn(100); setUploadStatusAnn('⏳ รอบันทึกข้อมูล','warning'); return;
-  }
-  const zone=document.getElementById('uzone-ann');
-  zone.classList.add('uploading');
-  try{ await _uploadToFlaskAnn(rid); }
-  finally{ zone.classList.remove('uploading'); }
-}
-function setUploadStatusAnn(text,cls='secondary'){
-  const el=document.getElementById('upload-status-ann');
-  if(el){ el.textContent=text; el.className=`badge bg-${cls} ms-1`; }
-}
-function showFileUIAnn(name,size){
-  document.getElementById('uzone-ann').classList.add('has-file');
-  document.getElementById('uzone-lbl-ann').textContent=name;
-  document.getElementById('fname-ann').textContent=name;
-  document.getElementById('fsize-ann').textContent=`${(size/1024).toFixed(1)} KB`;
-  document.getElementById('file-info-ann').style.display='';
-}
-function showProgressAnn(pct){
-  const wrap=document.getElementById('prog-wrap-ann');
-  const bar=document.getElementById('prog-bar-ann');
-  wrap.style.display=pct<100?'':'none'; bar.style.width=pct+'%';
-}
-async function _uploadToFlaskAnn(rid){
-  const fd=fileCache['ann']; if(!fd) return true;
-  setUploadStatusAnn('กำลังอัปโหลด...','warning'); showProgressAnn(50);
-  try{
-    const form=new FormData();
-    form.append('book_no','ann');
-    form.append('file',fd.file,fd.name);
-    const res=await apiFetch(`/api/records/${rid}/attachments`,'POST',form);
-    uploadedMeta['ann']={att_id:res.id,filename:res.filename,size:res.size};
-    showProgressAnn(100);
-    setUploadStatusAnn(`✓ อัปโหลดแล้ว (${(res.size/1024).toFixed(1)} KB)`,'success');
-    return true;
-  }catch(err){
-    showProgressAnn(0); setUploadStatusAnn('✗ อัปโหลดล้มเหลว','danger');
-    toast(`ประกาศ: ${err.message}`,'#dc3545');   // เหตุผลจาก server (ดู _uploadToFlask)
-    console.error('[Upload ประกาศ]',err.message); return false;
-  }
-}
-async function clearFileAnn(){
-  if(USE_FLASK&&uploadedMeta['ann']?.att_id){
-    try{ await apiFetch(`/api/attachments/${uploadedMeta['ann'].att_id}`,'DELETE'); }catch{}
-    delete uploadedMeta['ann'];
-  }
-  delete fileCache['ann'];
-  document.getElementById('file-inp-ann').value='';
-  document.getElementById('file-info-ann').style.display='none';
-  document.getElementById('uzone-ann').classList.remove('has-file','uploading');
-  document.getElementById('uzone-lbl-ann').textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
-  setUploadStatusAnn('ยังไม่มีไฟล์','secondary'); showProgressAnn(100);
-  toast('ลบไฟล์ประกาศเรียบร้อย','#6c757d');
-}
-async function downloadFileAnn(){
-  if(USE_FLASK&&uploadedMeta['ann']?.att_id){ window.open(`/api/attachments/${uploadedMeta['ann'].att_id}`,'_blank'); return; }
-  if(fileCache['ann']?.file){ _openLocal(fileCache['ann'],true); return; }
-  toast('ยังไม่มีไฟล์ประกาศ','#dc3545');
-}
-async function previewFileAnn(){
-  if(USE_FLASK&&uploadedMeta['ann']?.att_id){ window.open(`/api/attachments/${uploadedMeta['ann'].att_id}/preview`,'_blank'); return; }
-  if(fileCache['ann']?.file){ _openLocal(fileCache['ann'],false); return; }
-  toast('ยังไม่มีไฟล์ประกาศ','#dc3545');
+  toast('ยังไม่มีไฟล์'+SLOTS[n].title,'#dc3545');
 }
 
 /**
  * loadAttachments — โหลด metadata ไฟล์แนบของ record มาแสดงตอนกด "แก้ไข"
  * ล้าง uploadedMeta เดิมทั้งหมดก่อน (กันข้อมูลของ record ก่อนหน้าปนมา)
- * แล้ว map แต่ละไฟล์เข้า UI ตาม book_no: 'ann' → ช่องประกาศ, ตัวเลข → ช่องเล่มนั้น
+ * แล้ว map แต่ละไฟล์เข้า UI ตาม book_no ซึ่งเป็น key ของ SLOTS ตรง ๆ
+ * ข้าม book_no ที่ไม่มีใน SLOTS: DB ที่สร้างก่อนข้อ 18 เก็บช่องชื่ออะไรก็ได้
+ * (รีวิวยิง `book_no='../../etc/passwd'` ได้ 201) ซึ่งไม่มี element ให้แสดง
+ * ถ้าไม่ข้าม showFileUI จะพังแล้วไฟล์แนบที่เหลือในลิสต์ไม่ถูกโหลดเลย
  * ทำงานเฉพาะโหมด Flask (โหมด LocalStorage ไม่มีระบบไฟล์แนบบน server)
  * @param {string|number} rid  id ของ record ที่กำลังแก้ไข
  * @returns {Promise<void>} (side effect: เติม uploadedMeta + อัปเดต UI)
@@ -1124,14 +1089,11 @@ async function loadAttachments(rid){
   try{
     const list=await apiFetch(`/api/records/${rid}/attachments`);
     list.forEach(att=>{
-      uploadedMeta[att.book_no]={att_id:att.id,filename:att.filename,size:att.file_size};
-      if(att.book_no==='ann'){
-        showFileUIAnn(att.filename,att.file_size||0);
-        setUploadStatusAnn(`✓ อัปโหลดแล้ว (${((att.file_size||0)/1024).toFixed(1)} KB)`,'success');
-      } else {
-        showFileUI(att.book_no,att.filename,att.file_size||0);
-        setUploadStatus(att.book_no,`✓ อัปโหลดแล้ว (${((att.file_size||0)/1024).toFixed(1)} KB)`,'success');
-      }
+      const n=att.book_no;
+      if(!SLOTS[n]) return;
+      uploadedMeta[n]={att_id:att.id,filename:att.filename,size:att.file_size};
+      showFileUI(n,att.filename,att.file_size||0);
+      setUploadStatus(n,`✓ อัปโหลดแล้ว (${((att.file_size||0)/1024).toFixed(1)} KB)`,'success');
     });
   }catch(e){ console.warn('loadAttachments:',e.message); }
 }
@@ -1257,20 +1219,7 @@ function clearForm(){
   document.getElementById('eval52-container').innerHTML='';
   addEval51(); addEval51(); addEval51();
   addEval52(); addEval52(); addEval52();
-  for(let n=1;n<=3;n++){
-    delete fileCache[n]; delete uploadedMeta[n];
-    document.getElementById('file-inp-'+n).value='';
-    document.getElementById('file-info-'+n).style.display='none';
-    document.getElementById('uzone-'+n).classList.remove('has-file','uploading');
-    document.getElementById('uzone-lbl-'+n).textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
-    setUploadStatus(n,'ยังไม่มีไฟล์','secondary');
-  }
-  delete fileCache['ann']; delete uploadedMeta['ann'];
-  document.getElementById('file-inp-ann').value='';
-  document.getElementById('file-info-ann').style.display='none';
-  document.getElementById('uzone-ann').classList.remove('has-file','uploading');
-  document.getElementById('uzone-lbl-ann').textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
-  setUploadStatusAnn('ยังไม่มีไฟล์','secondary');
+  clearForm_filesOnly();
 }
 
 /**
@@ -1290,20 +1239,11 @@ function clearForm(){
 document.getElementById('mainForm').addEventListener('submit',async e=>{
   e.preventDefault();
   const d=getForm();
-  const missing=[];
-  if(!d.p1_title)         missing.push('คำนำหน้า');
-  if(!d.p1_fname)         missing.push('ชื่อ');
-  if(!d.p1_lname)         missing.push('นามสกุล');
-  if(!d.p2_pos_current)   missing.push('ตำแหน่งปัจจุบัน');
-  if(!d.p2_pos_level)     missing.push('ระดับตำแหน่งปัจจุบัน');
-  if(!d.p2_empid)         missing.push('ตำแหน่งเลขที่ (ส่วนที่ 2)');
-  if(!d.p2_dept)          missing.push('กลุ่มงาน (ส่วนที่ 2)');
-  if(!d.p2_sec)           missing.push('สำนัก/กอง/ศูนย์ (ส่วนที่ 2)');
-  if(!d.p3_pos)           missing.push('ตำแหน่งที่ได้รับเลือก');
-  if(!d.p3_pos_level)     missing.push('ระดับตำแหน่ง (ส่วนที่ 3)');
-  if(!d.p3_empid)         missing.push('ตำแหน่งเลขที่ (ส่วนที่ 3)');
-  if(!d.p4_work1_title)   missing.push('ผลงานที่ผ่านมาเรื่องที่ 1');
-  if(!d.p4_concept_title) missing.push('เรื่องที่เป็นข้อเสนอแนวคิด');
+  // ไล่ตามลำดับคีย์ใน REQUIRED_FIELDS ซึ่งเรียงตามลำดับช่องในฟอร์ม
+  // ข้อความที่ผู้ใช้เห็นจึงไล่จากบนลงล่างเหมือนที่ตาไล่หาช่องว่าง
+  const missing=REQUIRED_FIELDS
+    .filter(([col])=>!String(d[col]??'').trim())
+    .map(([,label])=>label);
   if(missing.length) return toast('กรุณากรอกข้อมูลที่จำเป็น (*): '+missing.join(', '),'#dc3545');
 
   const rid=document.getElementById('rec-id').value;
@@ -1312,24 +1252,24 @@ document.getElementById('mainForm').addEventListener('submit',async e=>{
     if(rid){ await dbUpd(rid,d); savedId=rid; }
     else{ const res=await dbAdd(d); savedId=res?.id||res?._id||''; }
 
+    const pending=Object.keys(SLOTS).filter(n=>fileCache[n]?.file&&!uploadedMeta[n]?.att_id);
     const uploadFails=[];
     if(USE_FLASK&&savedId){
-      for(let n=1;n<=3;n++){
-        if(fileCache[n]?.file&&!uploadedMeta[n]?.att_id){
-          const ok=await _uploadToFlask(n,savedId);
-          if(!ok) uploadFails.push(n);
-        }
-      }
-      if(fileCache['ann']?.file&&!uploadedMeta['ann']?.att_id){
-        const ok=await _uploadToFlaskAnn(savedId);
-        if(!ok) uploadFails.push('ประกาศ');
+      for(const n of pending){
+        const ok=await _uploadToFlask(n,savedId);
+        if(!ok) uploadFails.push(SLOTS[n].title);
       }
     }
+    // โหมด LocalStorage ไม่เคยอัปโหลดไฟล์ clearForm ข้างล่างจะล้าง fileCache ทิ้ง
+    // ต้องสรุปให้ผู้ใช้รู้ก่อน ไม่ใช่ตอบว่า "บันทึกเรียบร้อย" ลอย ๆ ทั้งที่ไฟล์หาย
+    const dropped=USE_FLASK?[]:pending.map(n=>SLOTS[n].title);
     clearForm(); await loadAll();
     if(uploadFails.length){
       const fl=uploadFails.join(', ');
-      setTimeout(()=>alert(`⚠️ บันทึกข้อมูลสำเร็จแล้ว\n\nแต่อัปโหลดไฟล์เล่มที่ ${fl} ไม่สำเร็จ\nกรุณาเปิดแก้ไขรายการนี้แล้วลองอัปโหลดไฟล์ใหม่`),200);
-      toast(`⚠️ บันทึกสำเร็จ แต่ไฟล์เล่ม ${fl} อัปโหลดไม่สำเร็จ`,'#f59e0b');
+      setTimeout(()=>alert(`⚠️ บันทึกข้อมูลสำเร็จแล้ว\n\nแต่อัปโหลดไฟล์${fl}ไม่สำเร็จ\nกรุณาเปิดแก้ไขรายการนี้แล้วลองอัปโหลดไฟล์ใหม่`),200);
+      toast(`⚠️ บันทึกสำเร็จ แต่ไฟล์${fl}อัปโหลดไม่สำเร็จ`,'#f59e0b');
+    } else if(dropped.length){
+      toast(`บันทึกข้อมูลแล้ว แต่ไฟล์แนบ (${dropped.join(', ')}) ไม่ถูกเก็บ — โหมด Offline`,'#f59e0b');
     } else {
       toast(rid?'อัปเดตข้อมูลเรียบร้อยแล้ว ✓':'บันทึกข้อมูลเรียบร้อยแล้ว ✓');
     }
@@ -1424,20 +1364,14 @@ async function editRec(id){
  * @returns {undefined}
  */
 function clearForm_filesOnly(){
-  for(let n=1;n<=3;n++){
+  Object.keys(SLOTS).forEach(n=>{
     delete fileCache[n]; delete uploadedMeta[n];
     document.getElementById('file-inp-'+n).value='';
     document.getElementById('file-info-'+n).style.display='none';
     document.getElementById('uzone-'+n).classList.remove('has-file','uploading');
     document.getElementById('uzone-lbl-'+n).textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
     setUploadStatus(n,'ยังไม่มีไฟล์','secondary');
-  }
-  delete fileCache['ann']; delete uploadedMeta['ann'];
-  document.getElementById('file-inp-ann').value='';
-  document.getElementById('file-info-ann').style.display='none';
-  document.getElementById('uzone-ann').classList.remove('has-file','uploading');
-  document.getElementById('uzone-lbl-ann').textContent='คลิกหรือลากไฟล์ PDF มาวางที่นี่';
-  setUploadStatusAnn('ยังไม่มีไฟล์','secondary');
+  });
 }
 /**
  * delRec — ลบรายการเดียว (มี confirm ป้องกันกดพลาด — ฝั่ง server จะลบ
@@ -1465,6 +1399,19 @@ async function clearAll(){
  * ================================================================ */
 
 /**
+ * csvCell — ทำให้ค่าหนึ่ง cell ปลอดภัยพอจะเปิดใน Excel โดยไม่ถูกตีความเป็นสูตร
+ *
+ * Excel อ่าน cell ที่ขึ้นต้นด้วย = + - @ tab หรือ CR เป็นสูตรและรันทันทีที่เปิดไฟล์
+ * การครอบด้วย " ตามกฎ CSV ไม่ช่วย เพราะ Excel ถอดเครื่องหมายคำพูดออกก่อนแล้วค่อยประเมิน
+ * นำหน้าด้วย single quote = บังคับให้ Excel อ่านเป็นข้อความ และไม่แสดง quote นั้นใน cell
+ *
+ * คู่แฝดฝั่ง server คือ `csv_cell()` ใน app.py แก้ที่นี่แล้วต้องแก้ที่นั่นด้วย
+ * ไม่อย่างนั้นไฟล์ที่ได้จากปุ่ม Export ฝั่ง client กับ /api/export/csv จะไม่เหมือนกัน
+ * @param {*} v  ค่าดิบจาก record
+ * @returns {string} ค่าที่ Excel จะแสดงเป็นข้อความเสมอ
+ */
+function csvCell(v){ const t=(v??'').toString(); return /^[=+\-@\t\r]/.test(t) ? "'"+t : t; }
+/**
  * dl — trigger การดาวน์โหลดไฟล์จาก string ใน memory
  * เทคนิคมาตรฐาน: ห่อเนื้อหาเป็น Blob → สร้าง object URL → คลิกลิงก์ <a download> จำลอง
  * @param {string} c  เนื้อหาไฟล์
@@ -1485,6 +1432,7 @@ function dl(c,n,t){ const a=document.createElement('a'); a.href=URL.createObject
  * Escape ตามกฎ CSV: ครอบทุกค่าด้วย " และแปลง " ภายในเป็น "" (กันค่า
  * ที่มี comma/ขึ้นบรรทัดใหม่ทำให้คอลัมน์เพี้ยน) + นำหน้าไฟล์ด้วย BOM
  * (U+FEFF) เพื่อให้ Excel บน Windows อ่านภาษาไทย UTF-8 ถูกต้อง
+ * ส่วนค่าที่ Excel จะตีความเป็นสูตรผ่าน csvCell() ก่อน (ดู jsdoc ของมัน)
  * @returns {undefined}
  */
 function exportAllCSV(){
@@ -1496,7 +1444,7 @@ function exportAllCSV(){
     }); return b;
   });
   const keys=[...new Set(flat.flatMap(r=>Object.keys(r)))];
-  const rows=flat.map(r=>keys.map(k=>`"${(r[k]||'').toString().replace(/"/g,'""')}"`).join(','));
+  const rows=flat.map(r=>keys.map(k=>`"${csvCell(r[k]||'').replace(/"/g,'""')}"`).join(','));
   dl('﻿'+[keys.join(','),...rows].join('\n'),`hr_promo_${dStr()}.csv`,'text/csv;charset=utf-8');
   toast('Export CSV สำเร็จ ✓');
 }
@@ -1606,8 +1554,28 @@ function renderDashboard(){
       scales:{x:{ticks:{font:{family:'Sarabun'},maxRotation:45}},y:{min:0,max:100,ticks:{font:{family:'Sarabun'}}}}}});
 }
 
-/* ── Init ── สร้าง UI ช่องอัปโหลด แล้ว reset ฟอร์มเป็นสถานะเริ่มต้น
+/**
+ * applyRequiredFields — ติดดอกจันและ attribute required ตามรายการจาก server
+ *
+ * markup ไม่มีสองอย่างนี้ติดมาเลย ทั้งคู่มาจาก REQUIRED_FIELDS ที่เดียว
+ * ป้ายกำกับคือ <label> ที่อยู่ติดกันข้างบนของ input (โครงฟอร์มเป็นแบบนี้ทุกช่อง)
+ * ช่องที่ server บังคับแต่ฟอร์มไม่มี = ผู้ใช้บันทึกไม่ได้และแก้เองไม่ได้ จึง warn ไว้
+ * ให้เห็นตอน dev แทนที่จะปล่อยให้ไปโผล่เป็น 422 ที่ผู้ใช้ทำอะไรต่อไม่ถูก
+ * @returns {undefined}
+ */
+function applyRequiredFields(){
+  REQUIRED_FIELDS.forEach(([id])=>{
+    const el=document.getElementById(id);
+    if(!el){ console.warn('ฟิลด์บังคับไม่มีช่องในฟอร์ม:',id); return; }
+    el.required=true;
+    const lbl=el.previousElementSibling;
+    if(lbl&&lbl.tagName==='LABEL') lbl.classList.add('required');
+  });
+}
+
+/* ── Init ── ติดกฎฟิลด์บังคับ สร้าง UI ช่องอัปโหลด แล้ว reset ฟอร์มเป็นสถานะเริ่มต้น
  * (ต้องเรียง buildFilePanels ก่อน เพราะ clearForm อ้างถึง element ของช่องไฟล์) */
+applyRequiredFields();
 buildFilePanels();
 clearForm();
 </script>

@@ -6,7 +6,7 @@ Flask + SQLite3 + pywebview  →  Desktop App (.exe)
 DB เก็บเฉพาะ stored_name (UUID filename) และ filename (ชื่อต้นฉบับ)
 """
 
-import os, re, sys, sqlite3, threading, time, base64, json, uuid, shutil, logging
+import os, re, sys, socket, sqlite3, threading, time, base64, json, uuid, shutil, logging
 from contextlib import closing
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -39,6 +39,11 @@ app.config['MAX_CONTENT_LENGTH'] = 110 * 1024 * 1024
 # (110 MB เผื่อ overhead ของ multipart) การตรวจฝั่ง client ยกเลิกได้ด้วยการยิง API ตรง
 # จึงต้องมีสำเนาฝั่ง server เสมอ
 MAX_PDF_SIZE = 100 * 1024 * 1024
+
+# ช่องไฟล์แนบที่ UI มีจริง: เล่ม 1-3 และประกาศ ('ann')
+# `book_no` มาจาก client ตรง ๆ ถ้าไม่จำกัดไว้ client จะสร้างช่องชื่ออะไรก็ได้ไม่จำกัดจำนวน
+# ซึ่งกลายเป็นไฟล์ที่หน้าจอไม่แสดงและผู้ใช้ลบออกไม่ได้ ได้แต่กินพื้นที่ไปเรื่อย ๆ
+BOOK_SLOTS = frozenset({'1', '2', '3', 'ann'})
 
 # รายละเอียด exception ทั้งหมดไปอยู่ที่นี่ แทนที่จะส่งกลับให้ client (ดู fail())
 # handler ถูกต่อใน _setup_logging() ซึ่ง main() เรียก — import เปล่าจึงไม่สร้างไฟล์
@@ -137,6 +142,30 @@ def row_to_dict(row):
     """
     return dict(row)
 
+def csv_cell(value) -> str:
+    """
+    ทำให้ค่าหนึ่ง cell ปลอดภัยพอจะเปิดใน Excel โดยไม่ถูกตีความเป็นสูตร
+
+    Excel อ่าน cell ที่ขึ้นต้นด้วย = + - @ tab หรือ CR เป็นสูตรและรันทันทีที่เปิดไฟล์
+    การครอบด้วย " ตามกฎ CSV ไม่ช่วย เพราะ Excel ถอดเครื่องหมายคำพูดออกก่อนแล้วค่อยประเมิน
+    วิธีมาตรฐานคือนำหน้าด้วย single quote ซึ่ง Excel อ่านเป็น "บังคับให้เป็นข้อความ"
+    และไม่แสดงตัว quote นั้นใน cell
+
+    ตัวนี้ต้องอยู่ตรงจุด export ไม่ใช่ฝากไว้กับ `.strip()` ขาเข้าของ sanitize_record
+    เพราะ export อ่านจาก DB ตรง ๆ และ DB แก้ด้วยมือผ่าน fix_db.py ได้
+
+    ฝั่ง client มีสำเนาตรรกะเดียวกันใน `exportAllCSV` (templates/index.html)
+    แก้ที่นี่แล้วต้องแก้ที่นั่นด้วย ไม่อย่างนั้นไฟล์ที่ได้จากสองปุ่มจะไม่เหมือนกัน
+
+    Parameters:
+        value: ค่าดิบจาก DB (None ถือเป็นค่าว่าง)
+
+    Returns:
+        str: ค่าที่ Excel จะแสดงเป็นข้อความเสมอ
+    """
+    text = '' if value is None else str(value)
+    return "'" + text if text[:1] in ('=', '+', '-', '@', '\t', '\r') else text
+
 def _safe_remove(path: str):
     """
     ลบไฟล์บนดิสก์แบบ "best-effort" — ไม่ raise exception ไม่ว่ากรณีใด
@@ -208,7 +237,7 @@ def _migrate_blobs_to_files(con):
     0. สำเนาไฟล์ .db ไว้เป็น <db>.pre-migration.bak ก่อนแตะอะไรทั้งสิ้น
     1. ตรวจ schema เก่าด้วย PRAGMA table_info แล้วเติมคอลัมน์ stored_name ถ้ายังไม่มี
     2. loop ทุกแถว: dump BLOB → ไฟล์ UUID.pdf แล้วบันทึกชื่อไฟล์กลับลง stored_name
-       ถ้าเขียนไฟล์แถวใดพลาด → rollback, ลบไฟล์ที่เขียนไปแล้ว, raise ทันที
+       ถ้าเขียนไฟล์แถวใดพลาด → raise ทันที (การเก็บกวาดอยู่ที่ except ที่เดียว)
        เหตุผลอยู่ที่ขั้นตอน 5 ซึ่งลบคอลัมน์ file_data ทิ้ง ถ้าปล่อยให้แถวที่พลาดผ่านไป
        BLOB ของแถวนั้นจะหายถาวรโดยไม่มีสัญญาณเตือนใด ๆ
     3. DROP ตารางชั่วคราว attachments_v2 ที่อาจค้างจาก migration ที่ล้มเหลวรอบก่อน
@@ -220,12 +249,25 @@ def _migrate_blobs_to_files(con):
     เหตุผลที่ต้องสร้างตารางใหม่แทน ALTER: SQLite ไม่รองรับ DROP COLUMN
     (ในเวอร์ชันเก่า) — การ rebuild ตารางคือวิธีมาตรฐานของ SQLite
 
+    **Invariant:** ล้มที่ขั้นไหนก็ตาม ต้องไม่เหลือไฟล์ที่ไม่มีแถวไหนชี้ถึงอยู่บนดิสก์
+    ทุกขั้นหลังขั้นที่ 0 อยู่ใน transaction เดียว DB จึงถอนตัวเองกลับได้ แต่ไฟล์บนดิสก์
+    ไม่มี transaction ให้ถอน การเก็บกวาดจึงต้องเขียนเอง และต้องครอบทุกทางที่ล้มได้
+    ไม่ใช่แค่ทางที่เขียนไฟล์พลาด (วัดก่อนแก้ ด้วยการให้ INSERT..SELECT ล้ม: ล้มหนึ่งรอบ
+    เหลือไฟล์กำพร้าเท่าจำนวนแถว รันใหม่อีกรอบได้ไฟล์เป็นสองเท่าของแถว)
+
+    นี่คือความหมายที่ใช้ได้จริงของคำว่า "รันซ้ำได้" ของฟังก์ชันนี้ ไม่ใช่การเติม
+    WHERE stored_name = '' เพื่อข้ามแถวที่เคยย้ายแล้ว — เงื่อนไขนั้นกรองอะไรไม่ได้เลย
+    เพราะไม่มีสถานะกลางให้กรอง: ทุกรอบที่ล้ม rollback คืนค่า stored_name เป็นค่าว่าง
+    ให้ทุกแถวอยู่แล้ว สิ่งที่รอดจาก rollback คือไฟล์ ไม่ใช่ค่าในคอลัมน์
+
     Parameters:
         con (sqlite3.Connection): connection ที่เปิดอยู่ (ฟังก์ชันนี้ commit เอง แต่ไม่ close)
 
     Raises:
         RuntimeError: สำรองไฟล์ DB ไม่ได้ หรือเขียนไฟล์แนบไม่ครบทุกแถว
-                      ทั้งสองกรณี DB เดิมยังอยู่ครบ ผู้ใช้แก้สาเหตุแล้วเปิดแอปใหม่ได้
+        Exception: ข้อผิดพลาดของ DB ในขั้นที่ 3-5 ถูกโยนต่อตามเดิมเพื่อเก็บ traceback
+                   ของต้นเหตุไว้ (log ที่ main() ตั้งไว้เป็นที่เดียวที่เหลือให้สืบ)
+        ทุกกรณี DB เดิมยังอยู่ครบและไม่มีไฟล์กำพร้าค้าง ผู้ใช้แก้สาเหตุแล้วเปิดแอปใหม่ได้
 
     Returns:
         None (side effect: โครงสร้างตาราง attachments เปลี่ยน + ไฟล์ถูกเขียนลงดิสก์)
@@ -245,75 +287,115 @@ def _migrate_blobs_to_files(con):
 
     att_cols = {row[1] for row in con.execute("PRAGMA table_info(attachments)").fetchall()}
 
-    if 'stored_name' not in att_cols:
-        con.execute("ALTER TABLE attachments ADD COLUMN stored_name TEXT NOT NULL DEFAULT ''")
-        att_cols.add('stored_name')
+    # ไฟล์ที่เขียนลงดิสก์แล้วในรอบนี้ — ต้องเก็บกวาดถ้าอะไรข้างล่างล้ม ไม่ว่าล้มที่ขั้นไหน
+    written = []
+    try:
+        if 'stored_name' not in att_cols:
+            con.execute("ALTER TABLE attachments ADD COLUMN stored_name TEXT NOT NULL DEFAULT ''")
+            att_cols.add('stored_name')
 
-    # ย้าย BLOB → file
-    rows = con.execute("SELECT id, filename, file_data FROM attachments").fetchall()
-    written, failed = [], []
-    for row in rows:
-        stored = uuid.uuid4().hex + '.pdf'
-        path   = _stored_path(stored)
-        try:
-            data = bytes(row['file_data']) if row['file_data'] else b''
-            with open(path, 'wb') as f:
-                f.write(data)
-        except Exception as e:
-            failed.append(f"id={row['id']} ({row['filename']}): {e}")
-            continue
-        written.append(path)
-        con.execute("UPDATE attachments SET stored_name=? WHERE id=?", [stored, row['id']])
+        # ย้าย BLOB → file
+        rows = con.execute("SELECT id, filename, file_data FROM attachments").fetchall()
+        failed = []
+        for row in rows:
+            stored = uuid.uuid4().hex + '.pdf'
+            path   = _stored_path(stored)
+            try:
+                data = bytes(row['file_data']) if row['file_data'] else b''
+                with open(path, 'wb') as f:
+                    f.write(data)
+            except Exception as e:
+                failed.append(f"id={row['id']} ({row['filename']}): {e}")
+                continue
+            written.append(path)
+            con.execute("UPDATE attachments SET stored_name=? WHERE id=?", [stored, row['id']])
 
-    # เขียนไฟล์ไม่ครบ = ห้ามไปต่อเด็ดขาด เพราะขั้นถัดไปลบคอลัมน์ file_data ทิ้ง
-    # เวอร์ชันก่อนหน้าตั้ง stored_name='' แล้วเดินหน้าต่อ ทำให้ PDF ของแถวที่เขียนพลาดหายถาวร
-    # โดยผู้ใช้ไม่รู้ตัวจนกดดาวน์โหลดแล้วเจอ 'ไฟล์หายจาก storage' ซึ่งสายไปแล้ว
-    # ยอมให้แอปเปิดไม่ขึ้นแล้วผู้ใช้ไปแก้สาเหตุ (ดิสก์เต็ม / สิทธิ์ / antivirus) ดีกว่าข้อมูลหาย
-    if failed:
-        con.rollback()                      # SQLite rollback DDL ได้ ALTER TABLE ข้างบนจึงถูกถอนด้วย
+        # เขียนไฟล์ไม่ครบ = ห้ามไปต่อเด็ดขาด เพราะขั้นถัดไปลบคอลัมน์ file_data ทิ้ง
+        # เวอร์ชันก่อนหน้าตั้ง stored_name='' แล้วเดินหน้าต่อ ทำให้ PDF ของแถวที่เขียนพลาดหายถาวร
+        # โดยผู้ใช้ไม่รู้ตัวจนกดดาวน์โหลดแล้วเจอ 'ไฟล์หายจาก storage' ซึ่งสายไปแล้ว
+        # ยอมให้แอปเปิดไม่ขึ้นแล้วผู้ใช้ไปแก้สาเหตุ (ดิสก์เต็ม / สิทธิ์ / antivirus) ดีกว่าข้อมูลหาย
+        if failed:
+            raise RuntimeError(
+                f'migration ล้มเหลว เขียนไฟล์แนบไม่สำเร็จ {len(failed)} จาก {len(rows)} รายการ '
+                f'ข้อมูลเดิมยังอยู่ครบ สำเนาอยู่ที่ {backup} — ' + ' | '.join(failed)
+            )
+
+        # ลบตารางชั่วคราวถ้าค้างจาก migration ที่ล้มเหลวก่อนหน้า
+        con.execute("DROP TABLE IF EXISTS attachments_v2")
+
+        # สร้างตารางใหม่โดยไม่มี file_data
+        con.execute("""
+            CREATE TABLE attachments_v2 (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id   INTEGER NOT NULL,
+                book_no     TEXT    NOT NULL,
+                filename    TEXT    NOT NULL,
+                stored_name TEXT    NOT NULL DEFAULT '',
+                mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
+                file_size   INTEGER,
+                uploaded_at TEXT,
+                FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+            )
+        """)
+
+        # INSERT เฉพาะคอลัมน์ที่มีอยู่จริงใน schema เก่า
+        src_map = {
+            'id':          'id',
+            'record_id':   'record_id',
+            'book_no':     'CAST(book_no AS TEXT)',
+            'filename':    'filename',
+            'stored_name': "COALESCE(stored_name, '')",
+            'mime_type':   "'application/pdf'" if 'mime_type'   not in att_cols else 'mime_type',
+            'file_size':   'file_size'          if 'file_size'  in att_cols     else 'NULL',
+            'uploaded_at': 'NULL'               if 'uploaded_at' not in att_cols else 'uploaded_at',
+        }
+        dst_cols = ', '.join(src_map.keys())
+        src_expr = ', '.join(src_map.values())
+        con.execute(f"INSERT INTO attachments_v2 ({dst_cols}) SELECT {src_expr} FROM attachments")
+        con.execute("DROP TABLE attachments")
+        con.execute("ALTER TABLE attachments_v2 RENAME TO attachments")
+        con.commit()
+    except Exception:
+        # ล้มที่ขั้นไหนก็ตามมาจบที่นี่ที่เดียว: rollback คืนสภาพ DB (SQLite ถอน DDL ได้
+        # ALTER TABLE ข้างบนจึงถูกถอนด้วย) แต่ไฟล์ที่เขียนลงดิสก์แล้วไม่มี transaction
+        # ให้ถอน ถ้าปล่อยไว้มันจะไม่มีแถวไหนชี้ถึงตลอดไป และการรันใหม่จะเขียนชุดใหม่
+        # ด้วย UUID ใหม่ = เปลืองพื้นที่เพิ่มขึ้นเท่าจำนวนแถวต่อการล้มหนึ่งรอบ
+        con.rollback()
         for p in written:
-            _safe_remove(p)                 # เก็บกวาดไฟล์ที่เขียนไปแล้ว ให้รันใหม่ได้จากสถานะสะอาด
-        raise RuntimeError(
-            f'migration ล้มเหลว เขียนไฟล์แนบไม่สำเร็จ {len(failed)} จาก {len(rows)} รายการ '
-            f'ข้อมูลเดิมยังอยู่ครบ สำเนาอยู่ที่ {backup} — ' + ' | '.join(failed)
-        )
+            _safe_remove(p)
+        raise
 
-    # ลบตารางชั่วคราวถ้าค้างจาก migration ที่ล้มเหลวก่อนหน้า
-    con.execute("DROP TABLE IF EXISTS attachments_v2")
 
-    # สร้างตารางใหม่โดยไม่มี file_data
-    con.execute("""
-        CREATE TABLE attachments_v2 (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            record_id   INTEGER NOT NULL,
-            book_no     TEXT    NOT NULL,
-            filename    TEXT    NOT NULL,
-            stored_name TEXT    NOT NULL DEFAULT '',
-            mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
-            file_size   INTEGER,
-            uploaded_at TEXT,
-            FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
-        )
-    """)
+def _dedupe_attachment_slots(con) -> list:
+    """
+    รวบแถว attachments ที่ซ้ำคู่ (record_id, book_no) ให้เหลือแถวใหม่สุดแถวเดียว
 
-    # INSERT เฉพาะคอลัมน์ที่มีอยู่จริงใน schema เก่า
-    src_map = {
-        'id':          'id',
-        'record_id':   'record_id',
-        'book_no':     'CAST(book_no AS TEXT)',
-        'filename':    'filename',
-        'stored_name': "COALESCE(stored_name, '')",
-        'mime_type':   "'application/pdf'" if 'mime_type'   not in att_cols else 'mime_type',
-        'file_size':   'file_size'          if 'file_size'  in att_cols     else 'NULL',
-        'uploaded_at': 'NULL'               if 'uploaded_at' not in att_cols else 'uploaded_at',
-    }
-    dst_cols = ', '.join(src_map.keys())
-    src_expr = ', '.join(src_map.values())
-    con.execute(f"INSERT INTO attachments_v2 ({dst_cols}) SELECT {src_expr} FROM attachments")
-    con.execute("DROP TABLE attachments")
-    con.execute("ALTER TABLE attachments_v2 RENAME TO attachments")
-    con.commit()
+    ต้องทำก่อนสร้าง UNIQUE index เสมอ: DB ที่ใช้งานมาก่อนหน้านี้ไม่มีอะไรกันแถวซ้ำ
+    ถ้าเจอซ้ำแล้วไปสร้าง index ตรง ๆ `CREATE UNIQUE INDEX` จะโยน IntegrityError
+    กลางทาง `init_db()` ซึ่งแปลว่าแอปเปิดไม่ขึ้นเลย ไม่ใช่แค่ฟีเจอร์เดียวพัง
 
+    เลือกแถว id มากสุดของแต่ละช่องเป็นผู้รอด เพราะ id เป็น AUTOINCREMENT
+    แถวที่ id สูงกว่าคือไฟล์ที่ผู้ใช้อัปโหลดทีหลัง ซึ่งเป็นตัวที่ UI แสดงอยู่แล้ว
+    (`loadAttachments` วนทับ uploadedMeta ตามลำดับที่ได้มา แถวท้ายจึงชนะ)
+
+    คืน path ของไฟล์ที่ไม่มีแถวชี้ถึงแล้ว ให้ผู้เรียกลบ "หลัง commit" ตาม invariant
+    ของ file storage — ลบก่อน commit แล้ว rollback จะได้แถวที่ชี้ไฟล์หาย
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่อยู่ใน transaction ของ init_db
+
+    Returns:
+        list[str]: path เต็มของไฟล์ที่ต้องลบหลัง commit
+    """
+    doomed = con.execute(
+        'SELECT stored_name FROM attachments WHERE id NOT IN '
+        '(SELECT MAX(id) FROM attachments GROUP BY record_id, book_no)'
+    ).fetchall()
+    if not doomed:
+        return []
+    con.execute('DELETE FROM attachments WHERE id NOT IN '
+                '(SELECT MAX(id) FROM attachments GROUP BY record_id, book_no)')
+    return [_stored_path(r[0]) for r in doomed if r[0]]
 
 def init_db():
     """
@@ -428,7 +510,15 @@ def init_db():
             if col not in existing:
                 con.execute(f'ALTER TABLE records ADD COLUMN {col} {ctype}')
 
+        orphaned = _dedupe_attachment_slots(con)
+        con.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_att_record_book '
+                    'ON attachments(record_id, book_no)')
+
         con.commit()
+
+    # ลบไฟล์หลัง commit เสมอ ตาม invariant เดียวกับ delete_record
+    for path in orphaned:
+        _safe_remove(path)
 
 
 # ────────────────────────────────────────────────
@@ -448,13 +538,29 @@ RECORD_COLS = {
     'eval51_rows', 'eval52_rows',
 }
 
-# ฟิลด์บังคับฝั่ง server (ขั้นต่ำกว่าฝั่ง frontend ซึ่งบังคับมากกว่า) —
-# map คอลัมน์ → ป้ายชื่อภาษาไทย ใช้ประกอบข้อความ error ให้ผู้ใช้อ่านรู้เรื่อง
+# ฟิลด์บังคับ — map คอลัมน์ → ป้ายชื่อภาษาไทย ใช้ประกอบข้อความ error ให้ผู้ใช้อ่านรู้เรื่อง
+#
+# **Invariant:** นี่คือ "ที่เดียว" ที่กฎนี้ถูกเขียนไว้ หน้าเว็บรับรายการนี้ไปทาง
+# index() แล้วใช้ทั้งการขึ้นดอกจัน การตั้ง attribute required และการตรวจก่อน submit
+# ของเดิมบังคับแค่ 4 ช่องขณะที่ฟอร์มบังคับ 13 ช่อง คือกฎเดียวกันเขียนไว้สองที่
+# ด้วยค่าไม่เท่ากัน ซึ่งเพี้ยนเพิ่มทุกครั้งที่มีคนแก้ฝั่งเดียว
+#
+# ลำดับคีย์เรียงตามลำดับช่องในฟอร์ม เพราะข้อความ error ไล่ชื่อฟิลด์ตามลำดับนี้
+# ป้ายต้องไม่ซ้ำกัน: `ตำแหน่งเลขที่` มีสองช่อง ถ้าป้ายเหมือนกันผู้ใช้จะไม่รู้ว่าช่องไหน
 REQUIRED_FIELDS = {
-    'p1_fname':       'ชื่อ',
-    'p1_lname':       'นามสกุล',
-    'p2_pos_current': 'ตำแหน่งปัจจุบัน',
-    'p2_empid':       'ตำแหน่งเลขที่',
+    'p1_title':         'คำนำหน้า',
+    'p1_fname':         'ชื่อ',
+    'p1_lname':         'นามสกุล',
+    'p2_pos_current':   'ตำแหน่งปัจจุบัน',
+    'p2_pos_level':     'ระดับตำแหน่งปัจจุบัน',
+    'p2_empid':         'ตำแหน่งเลขที่ (ส่วนที่ 2)',
+    'p2_dept':          'กลุ่มงาน (ส่วนที่ 2)',
+    'p2_sec':           'สำนัก/กอง/ศูนย์ (ส่วนที่ 2)',
+    'p3_pos':           'ตำแหน่งที่ได้รับเลือก',
+    'p3_pos_level':     'ระดับตำแหน่ง (ส่วนที่ 3)',
+    'p3_empid':         'ตำแหน่งเลขที่ (ส่วนที่ 3)',
+    'p4_work1_title':   'ผลงานที่ผ่านมาเรื่องที่ 1',
+    'p4_concept_title': 'เรื่องที่เป็นข้อเสนอแนวคิด',
 }
 
 def sanitize_record(d: dict) -> dict:
@@ -515,6 +621,30 @@ def validate_required(allowed: dict) -> list:
     return [label for col, label in REQUIRED_FIELDS.items()
             if not allowed.get(col, '').strip()]
 
+def required_error(missing: list):
+    """
+    ประกอบ response 422 จากรายการฟิลด์ที่ยังว่าง
+
+    `error` ต้องสั้นกว่า 80 ตัวอักษรตาม invariant ของ `toastError` ฝั่ง frontend
+    (ยาวกว่านั้นมันเปิด `alert()` ทับหน้าจอ) การไล่ชื่อครบทั้ง 13 ช่องยาว 303
+    ตัวอักษร จึงบอกแค่จำนวนเมื่อขาดหลายช่อง และบอกชื่อตรง ๆ เมื่อขาดช่องเดียว
+    (กรณียาวสุดของสองรูปนี้คือ 45 และ 36 ตัวอักษร)
+
+    รายชื่อเต็มไม่ได้หายไป แต่ย้ายไปอยู่ใน `missing` ให้ client ที่อ่านรายละเอียด
+    เองได้ (เช่น curl) ใช้ ส่วนฟอร์มมีด่านของตัวเองที่ไล่ชื่อทุกช่องให้ผู้ใช้อยู่แล้ว
+
+    Parameters:
+        missing (list[str]): ป้ายภาษาไทยของฟิลด์ที่ยังว่าง (จาก validate_required)
+
+    Returns:
+        tuple: (Response JSON, 422)
+    """
+    if len(missing) == 1:
+        msg = 'กรุณากรอก' + missing[0]
+    else:
+        msg = 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ ยังขาด %d ช่อง' % len(missing)
+    return jsonify({'error': msg, 'missing': missing}), 422
+
 
 # ────────────────────────────────────────────────
 # Routes — Records
@@ -526,10 +656,20 @@ def index():
     หน้าแรก — serve Single Page Application ทั้งหมดจาก template เดียว
     (frontend จัดการ tab/ฟอร์ม/ตารางเองด้วย JavaScript แล้วคุยกลับมาทาง /api/*)
 
+    ส่ง REQUIRED_FIELDS ไปกับหน้าเว็บด้วย เพื่อให้ดอกจัน การตรวจของ browser และ
+    การตรวจก่อน submit อ่านกฎชุดเดียวกับที่ validate_required() ใช้จริง
+    (ฝังเป็น JSON ในหน้า ไม่ใช่ endpoint แยก เพราะหน้าเว็บต้องใช้ตั้งแต่ก่อน
+    probe รู้ว่าคุย API ได้หรือไม่ และ endpoint ที่ล้มจะทำให้ฟอร์มไม่มีกฎเลย)
+
+    ส่งเป็น list ของคู่ ไม่ใช่ dict เพราะ `tojson` ของ Jinja เรียงคีย์ใหม่ตาม
+    `app.json.sort_keys` ซึ่งค่าเริ่มต้นเป็น True ลำดับช่องในข้อความ error ฝั่ง
+    client จะกลายเป็นเรียงตามตัวอักษรแทนลำดับช่องในฟอร์ม ไม่ตรงกับฝั่ง server
+    list เก็บลำดับไว้ในตัวโครงสร้างเอง ไม่ขึ้นกับ flag ของ serializer
+
     Returns:
         str: HTML ของ templates/index.html
     """
-    return render_template('index.html')
+    return render_template('index.html', required_fields=list(REQUIRED_FIELDS.items()))
 
 @app.route('/api/records', methods=['GET'])
 def get_all():
@@ -592,7 +732,7 @@ def add_record():
     allowed = sanitize_record(d)
     missing = validate_required(allowed)
     if missing:
-        return jsonify({'error': 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ: ' + ', '.join(missing)}), 422
+        return required_error(missing)
     allowed['created'] = now_str()
     allowed['updated'] = ''
     cols = ', '.join(allowed.keys())
@@ -637,7 +777,7 @@ def update_record(rid):
     allowed = sanitize_record(d)
     missing = validate_required(allowed)
     if missing:
-        return jsonify({'error': 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ: ' + ', '.join(missing)}), 422
+        return required_error(missing)
     allowed['updated'] = now_str()
     sets = ', '.join([f'{k}=?' for k in allowed.keys()])
     con  = get_db()
@@ -669,6 +809,12 @@ def delete_record(rid):
        แต่กดดาวน์โหลดได้ 404 ซึ่งแย่กว่าไฟล์กำพร้าที่เสียแค่พื้นที่ดิสก์
     (ถ้าลบไฟล์พลาด _safe_remove จะกลืน error → อย่างแย่คือไฟล์กำพร้า
     แต่ข้อมูลใน DB ยัง consistent เสมอ)
+
+    และจงใจตอบ 200 แม้ไม่พบ id เหมือน delete_attachment เพราะ DELETE เป็น
+    idempotent: สิ่งที่ client ขอคือ "ให้ record นี้ไม่มีอยู่" ซึ่งเป็นจริงอยู่แล้ว
+    ต่างจาก update_record ที่ตอบ 404 เพราะ PUT ขอให้ record ถือค่าใหม่
+    ซึ่งทำให้เป็นจริงไม่ได้เลยถ้าไม่มีแถวอยู่ ความต่างนี้จึงไม่ใช่การลืมเช็ก
+    (มี test กันไว้ทั้งสองฝั่ง — `-k item20`)
 
     Parameters:
         rid (int): id ของ record ที่จะลบ
@@ -772,8 +918,9 @@ def upload_attachment(rid):
     2. เขียนไฟล์ใหม่ลงดิสก์ด้วยชื่อ UUID ก่อนแตะ DB
        (ใช้ UUID เพื่อกันชื่อชนกันและตัดปัญหาชื่อไฟล์ภาษาไทย/อักขระพิเศษบนดิสก์)
     3. จำ path ของไฟล์เก่าในช่อง (record_id, book_no) เดียวกันไว้ แต่ยังไม่ลบ
-    4. DELETE row เก่า + INSERT row ใหม่ = พฤติกรรม "replace" — บังคับให้
-       1 record มีไฟล์ได้ช่องละ 1 ไฟล์ (เล่ม 1-3 และประกาศ 'ann')
+    4. DELETE row เก่า (อ่านชื่อไฟล์เก่าจาก RETURNING ของ DELETE เอง) + INSERT row ใหม่
+       = พฤติกรรม "replace" ส่วนกฎ 1 ช่อง 1 ไฟล์ บังคับที่ schema แล้วด้วย
+       UNIQUE index idx_att_record_book ไม่ได้อาศัยลำดับคำสั่งตรงนี้อย่างเดียว
     5. commit ผ่านแล้วจึงลบไฟล์เก่า — ลำดับนี้สำคัญ ถ้าลบก่อน commit แล้วเกิด
        exception ระหว่างทาง rollback จะคืน row เก่าที่ชี้ไปยังไฟล์ที่หายไปแล้ว
     6. ถ้า DB ล้มเหลว: rollback แล้วลบไฟล์ที่เพิ่งเขียนทิ้ง (ขั้นตอน compensate)
@@ -789,6 +936,7 @@ def upload_attachment(rid):
         Response (JSON):
         - 201 {'id', 'ok', 'filename', 'size'} เมื่อสำเร็จ
         - 400 ไม่มีไฟล์ / ไฟล์ว่าง / ไม่ใช่ PDF / base64 เสียหาย / body ผิดรูปแบบ
+              / book_no ไม่ใช่ช่องที่ UI มีจริง (ดู BOOK_SLOTS)
         - 404 ไม่พบ record id นี้ (เช็กก่อนเขียนไฟล์ และดักกรณี race ที่ FK constraint ด้วย)
         - 413 ไฟล์เกิน MAX_PDF_SIZE (100 MB)
         - 500 เขียนไฟล์หรือ DB ล้มเหลว (พร้อม rollback ทั้งไฟล์และ DB)
@@ -817,6 +965,8 @@ def upload_attachment(rid):
     # ตรวจเนื้อหาไฟล์ก่อนแตะดิสก์ — ของพวกนี้เช็กฝั่ง client อยู่แล้วแต่ยกเลิกได้ด้วยการยิง API ตรง
     # และถ้าหลุดเข้ามาได้ ไฟล์จะถูก serve กลับด้วย Content-Type: application/pdf ผ่าน /preview
     # (mime ด้านล่าง hardcode ไว้ ความถูกต้องของมันจึงขึ้นอยู่กับด่านนี้ทั้งหมด)
+    if book_no not in BOOK_SLOTS:
+        return jsonify({'error': 'ช่องไฟล์แนบไม่ถูกต้อง รองรับเฉพาะเล่ม 1-3 และประกาศเท่านั้น'}), 400
     if not file_bytes:
         return jsonify({'error': 'ไฟล์ว่าง ไม่มีข้อมูลให้บันทึก'}), 400
     if len(file_bytes) > MAX_PDF_SIZE:
@@ -852,15 +1002,18 @@ def upload_attachment(rid):
     con  = get_db()
     old_path = None
     try:
-        # จำ path ของไฟล์เก่าไว้ก่อน แต่ยังไม่ลบ — ต้องรอให้ commit ผ่านก่อน (ดูด้านล่าง)
+        # อ่านชื่อไฟล์เก่าจากตัว DELETE เอง ไม่ใช่ SELECT แยกก่อนหน้า:
+        # SELECT แยกจะอ่านใน snapshot ของ request ตัวเองซึ่งเกิด "ก่อน" ได้ write lock
+        # ถ้ามีหลาย request อัปช่องเดียวกันพร้อมกัน ทุกตัวจะเห็นชื่อไฟล์เก่าตัวเดียวกัน
+        # แล้วไฟล์ที่ผู้แพ้แทนที่ไปจะไม่มีใครลบ กลายเป็นไฟล์กำพร้าเงียบ ๆ
+        # DELETE ยึด write lock ก่อนทำงาน ค่าที่ RETURNING คืนจึงเป็นแถวที่ถูกลบไปจริง ๆ
+        # (ยังไม่ลบไฟล์ตรงนี้ ต้องรอ commit ผ่านก่อนเหมือนเดิม)
         old = con.execute(
-            'SELECT stored_name FROM attachments WHERE record_id=? AND book_no=?',
+            'DELETE FROM attachments WHERE record_id=? AND book_no=? RETURNING stored_name',
             [rid, book_no]
         ).fetchone()
         if old and old['stored_name']:
             old_path = _stored_path(old['stored_name'])
-
-        con.execute('DELETE FROM attachments WHERE record_id=? AND book_no=?', [rid, book_no])
         cur = con.execute(
             'INSERT INTO attachments '
             '(record_id, book_no, filename, stored_name, mime_type, file_size, uploaded_at) '
@@ -1060,9 +1213,12 @@ def export_csv_server():
     buf = _io.StringIO()
     w   = csv.DictWriter(buf, fieldnames=rows[0].keys())
     w.writeheader()
-    w.writerows([dict(r) for r in rows])
+    w.writerows([{k: csv_cell(v) for k, v in dict(r).items()} for r in rows])
     from flask import Response
-    return Response('﻿' + buf.getvalue(), mimetype='text/csv; charset=utf-8-sig',
+    # mimetype ต้องไม่มี parameter ติดมาด้วย — Werkzeug เติม charset ของตัวเองต่อท้ายเสมอ
+    # ใส่มาเองจะได้ charset สองตัวในหัวเดียว ('text/csv; charset=X; charset=utf-8')
+    # ซึ่ง client ที่อ่านตัวแรกจะเจอค่าที่ไม่รู้จักแล้ว fallback ไป encoding อื่น
+    return Response('﻿' + buf.getvalue(), mimetype='text/csv',
                     headers={'Content-Disposition': f'attachment; filename=hr_promotion_{dstr()}.csv'})
 
 
@@ -1100,6 +1256,35 @@ def _setup_logging():
         target.addHandler(handler)
         target.setLevel(logging.INFO)
 
+# เพดานเวลารอ server ตอนเปิดโปรแกรม ตั้งไว้กว้างเพราะเครื่องผู้ใช้ปลายทาง
+# อาจมี antivirus สแกน .exe ที่เพิ่งแตกไฟล์อยู่ ซึ่งกินเวลาหลายวินาที
+STARTUP_WAIT_SECONDS = 10.0
+
+def _wait_for_port(port: int, timeout: float = STARTUP_WAIT_SECONDS,
+                   host: str = '127.0.0.1') -> bool:
+    """
+    รอจนกว่า port จะรับ connection ได้จริง
+
+    คืน False เมื่อหมดเวลาแทนการ raise หรือวนต่อไม่สิ้นสุด เพราะผู้เรียกต้อง
+    เปิดหน้าต่างให้ได้อยู่ดี — หน้าต่างที่ไม่เคยเปิดแย่กว่าหน้าต่างที่โหลดช้า
+
+    Parameters:
+        port (int): port ที่รอ
+        timeout (float): เพดานเวลารวม (วินาที)
+        host (str): host ที่ลองต่อ
+
+    Returns:
+        bool: True = ต่อติดแล้ว, False = หมดเวลา
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
 def run_flask():
     """
     รัน Flask server สำหรับโหมด desktop (ถูกเรียกใน background thread)
@@ -1122,8 +1307,8 @@ def main():
     เพราะ GUI library ส่วนใหญ่บังคับให้ event loop อยู่ main thread เท่านั้น
     การตั้ง daemon=True ทำให้ Flask thread ถูกเก็บกวาดอัตโนมัติเมื่อผู้ใช้
     ปิดหน้าต่าง (ไม่ต้องจัดการ shutdown เอง)
-    sleep(0.8) = รอให้ server เปิด port เสร็จก่อน webview โหลด URL
-    (วิธี simple แบบ fixed-delay — แลกความง่ายกับ delay เล็กน้อยตอนเปิด)
+    รอด้วย _wait_for_port ไม่ใช่ sleep คงที่ เพราะเวลาที่ server ใช้เปิด port
+    ขึ้นกับเครื่องผู้ใช้ ไม่ใช่ค่าที่เดาไว้ล่วงหน้าได้
 
     โหมด fallback (ไม่มี pywebview เช่น รันบนเครื่อง dev):
     รันเป็น web server ปกติให้เปิดผ่านเบราว์เซอร์ ผูกที่ 127.0.0.1 เท่านั้นเหมือนโหมด desktop
@@ -1139,7 +1324,11 @@ def main():
     if HAS_WEBVIEW:
         t = threading.Thread(target=run_flask, daemon=True)
         t.start()
-        time.sleep(0.8)
+        # เปิดหน้าต่างต่อแม้รอไม่ทัน: หน้าขาวที่ refresh ได้ยังดีกว่าโปรแกรม
+        # ที่กดเปิดแล้วไม่มีอะไรขึ้นมาเลย และ log เป็นร่องรอยเดียวที่เหลือไว้สืบ
+        if not _wait_for_port(PORT):
+            log.warning('server ยังไม่รับ connection ใน %.0f วินาที เปิดหน้าต่างต่อ',
+                        STARTUP_WAIT_SECONDS)
         webview.create_window(
             title='ระบบบันทึกข้อมูลบุคคลและประเมินผลงานเพื่อเลื่อนระดับตำแหน่ง',
             url=f'http://127.0.0.1:{PORT}',

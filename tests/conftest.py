@@ -62,17 +62,33 @@ def uploads(hr_app):
     return _ls
 
 
+# record ที่กรอกฟิลด์บังคับครบตาม `REQUIRED_FIELDS` พอดี — ไม่มากไม่น้อยกว่านั้น
+# เขียนคีย์ไว้ตรง ๆ ไม่ derive จาก `hr.REQUIRED_FIELDS` เพราะ payload ที่สร้างจาก
+# ตัวที่กำลังทดสอบอยู่จะผ่านเสมอไม่ว่ารายการฝั่ง server จะเปลี่ยนไปเป็นอะไร
+# ถ้าสองฝั่งหลุดจากกันเมื่อไร `test_item25_payload_matches_the_server_list` จะบอกจุดเดียวจบ
+VALID_RECORD = {
+    'p1_title':         'นาย',
+    'p1_fname':         'สมชาย',
+    'p1_lname':         'ใจดี',
+    'p2_pos_current':   'นักวิชาการคอมพิวเตอร์',
+    'p2_pos_level':     'ชำนาญการ',
+    'p2_empid':         '12345',
+    'p2_dept':          'กลุ่มสรรหาและข้อมูลบุคคล',
+    'p2_sec':           'กองการเจ้าหน้าที่',
+    'p3_pos':           'นักวิเคราะห์นโยบายและแผน',
+    'p3_pos_level':     'ชำนาญการพิเศษ',
+    'p3_empid':         '67890',
+    'p4_work1_title':   'ผลงานเรื่องที่ 1',
+    'p4_concept_title': 'ข้อเสนอแนวคิดการพัฒนางาน',
+}
+
+
 @pytest.fixture
 def make_record(client):
     """สร้าง record ที่ผ่าน validate_required แล้วคืน id"""
 
     def _make(**overrides):
-        payload = {
-            'p1_fname': 'สมชาย',
-            'p1_lname': 'ใจดี',
-            'p2_pos_current': 'นักวิชาการคอมพิวเตอร์',
-            'p2_empid': '12345',
-        }
+        payload = dict(VALID_RECORD)
         payload.update(overrides)
         r = client.post('/api/records', json=payload)
         assert r.status_code == 201, r.get_data(as_text=True)

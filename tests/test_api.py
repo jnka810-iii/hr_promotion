@@ -13,12 +13,21 @@
 """
 
 import base64
+import csv
+import io
+import json
 import os
+import re
+import socket
 import sqlite3
+import threading
+import time
+import types
 
 import pytest
 
 import app as hr
+from conftest import VALID_RECORD
 
 
 # ────────────────────────────────────────────────
@@ -42,11 +51,8 @@ def test_item5_thai_readable_in_raw_list_response(client, make_record):
 def test_item5_thai_readable_in_single_record_and_eval_rows(client, make_record):
     rid = make_record()
     rows = [{'date': '2026-04-21', 'score': '90', 'grade': 'ผ่าน (≥60%)'}]
-    r = client.put('/api/records/%d' % rid, json={
-        'p1_fname': 'สมหญิง', 'p1_lname': 'ใจดี',
-        'p2_pos_current': 'นักวิชาการคอมพิวเตอร์', 'p2_empid': '12345',
-        'eval51_rows': rows,
-    })
+    r = client.put('/api/records/%d' % rid,
+                   json=dict(VALID_RECORD, p1_fname='สมหญิง', eval51_rows=rows))
     assert r.status_code == 200
     body = client.get('/api/records/%d' % rid).get_data(as_text=True)
     assert 'สมหญิง' in body
@@ -221,14 +227,17 @@ def test_item7_delete_all_success_removes_every_file(client, make_record, upload
 # ────────────────────────────────────────────────
 
 def test_required_fields_rejected_with_thai_labels(client):
+    """
+    ป้ายภาษาไทยอยู่ใน `missing` ไม่ใช่ใน `error` เพราะ `error` คือข้อความที่ frontend
+    เอาไปโชว์ ซึ่งต้องสั้นกว่า 80 ตัวอักษร (ดู required_error ใน app.py)
+    """
     r = client.post('/api/records', json={'p1_fname': 'สมชาย'})
     assert r.status_code == 422
-    assert 'นามสกุล' in r.get_json()['error']
+    assert 'นามสกุล' in r.get_json()['missing']
 
 
 def test_update_missing_record_returns_404(client):
-    r = client.put('/api/records/9999', json={
-        'p1_fname': 'ก', 'p1_lname': 'ข', 'p2_pos_current': 'ค', 'p2_empid': '1'})
+    r = client.put('/api/records/9999', json=VALID_RECORD)
     assert r.status_code == 404
 
 
@@ -353,11 +362,9 @@ MAX_CLIENT_MESSAGE = 80
 # (ชื่อเคส, คำสั่งที่จะให้ล้ม, ฟังก์ชันยิง request)
 WRITE_FAILURES = [
     ('add_record',        'INSERT INTO RECORDS',
-     lambda c, rid: c.post('/api/records', json={'p1_fname': 'ก', 'p1_lname': 'ข',
-                                                 'p2_pos_current': 'ค', 'p2_empid': '1'})),
+     lambda c, rid: c.post('/api/records', json=VALID_RECORD)),
     ('update_record',     'UPDATE RECORDS',
-     lambda c, rid: c.put('/api/records/%d' % rid, json={'p1_fname': 'ก', 'p1_lname': 'ข',
-                                                         'p2_pos_current': 'ค', 'p2_empid': '1'})),
+     lambda c, rid: c.put('/api/records/%d' % rid, json=VALID_RECORD)),
     ('delete_record',     'DELETE FROM RECORDS',
      lambda c, rid: c.delete('/api/records/%d' % rid)),
     ('delete_all',        'DELETE FROM RECORDS',
@@ -426,8 +433,7 @@ def test_item9_detail_still_reaches_the_server_log(client, make_record, fail_sql
     rid = make_record()
     fail_sql('UPDATE RECORDS')
     with caplog.at_level('ERROR'):
-        client.put('/api/records/%d' % rid, json={'p1_fname': 'ก', 'p1_lname': 'ข',
-                                                  'p2_pos_current': 'ค', 'p2_empid': '1'})
+        client.put('/api/records/%d' % rid, json=VALID_RECORD)
     assert 'simulated DB failure' in caplog.text
     assert 'Traceback' in caplog.text
 
@@ -490,3 +496,517 @@ def test_item11_read_route_closes_connection_on_success(client, make_record, fai
     assert client.get('/api/records').status_code == 200
     assert fail_sql.handed_out
     assert fail_sql.unclosed() == []
+
+
+# ────────────────────────────────────────────────
+# ข้อ 14 — Content-Type ของ CSV export
+# ────────────────────────────────────────────────
+
+def test_item14_csv_content_type_declares_charset_once(client, make_record):
+    """
+    เดิมส่ง mimetype='text/csv; charset=utf-8-sig' ซึ่งใส่ parameter มาใน mimetype
+    แล้ว Werkzeug เติม charset ของตัวเองต่อท้ายอีกชั้น ได้ header ที่มี charset สองตัว
+    และตัวแรกเป็น utf-8-sig ซึ่งเป็นชื่อ codec ของ Python ไม่ใช่ charset ที่จดทะเบียนกับ IANA
+    """
+    make_record()
+    ct = client.get('/api/export/csv').headers['Content-Type']
+    assert ct.count('charset') == 1
+    assert 'utf-8-sig' not in ct
+    assert ct.startswith('text/csv')
+
+
+def test_item14_csv_still_starts_with_the_excel_bom(client, make_record):
+    """กันการแก้เกินเลย — BOM คือกลไกที่ทำให้ Excel อ่านไทยถูก ห้ามหายไปพร้อม charset"""
+    make_record()
+    assert client.get('/api/export/csv').get_data().startswith(b'\xef\xbb\xbf')
+
+
+# ────────────────────────────────────────────────
+# ข้อ 15 — CSV formula injection
+# ────────────────────────────────────────────────
+
+# Excel ตีความ cell ที่ขึ้นต้นด้วยอักขระพวกนี้เป็นสูตร การครอบด้วย " ไม่ช่วย
+# เพราะ Excel ถอดเครื่องหมายคำพูดของ CSV ออกก่อนแล้วจึงประเมินเนื้อหา
+FORMULA_LEADERS = ['=', '+', '-', '@', '\t', '\r']
+
+# ที่ผ่าน API ได้จริงมีแค่ 4 ตัวแรก — `sanitize_record` เรียก .strip() ซึ่งกิน \t และ \r
+# หัวค่าไปก่อนถึง DB เสมอ การเทสต์สองตัวนั้นผ่าน API จึงเป็น assertion ที่ fail ไม่ได้
+API_REACHABLE_LEADERS = ['=', '+', '-', '@']
+
+
+@pytest.mark.parametrize('lead', API_REACHABLE_LEADERS, ids=API_REACHABLE_LEADERS)
+def test_item15_server_export_neutralizes_formula_cells(client, make_record, lead):
+    """ค่าอันตรายต้องถูกทำให้ Excel มองเป็นข้อความ ไม่ใช่สูตรที่รันทันทีที่เปิดไฟล์"""
+    make_record(p1_fname=lead + 'HYPERLINK("http://evil.test","click")')
+    body = client.get('/api/export/csv').get_data().decode('utf-8-sig')
+    cells = [c for row in csv.reader(io.StringIO(body)) for c in row]
+    dangerous = [c for c in cells if c[:1] in FORMULA_LEADERS]
+    assert dangerous == [], 'cell ที่ Excel จะรันเป็นสูตร: %r' % dangerous
+    assert any('HYPERLINK' in c for c in cells), 'ข้อมูลต้องยังอยู่ ไม่ใช่ถูกลบทิ้ง'
+
+
+@pytest.mark.parametrize('lead', ['\t', '\r'], ids=['tab', 'cr'])
+def test_item15_export_neutralizes_rows_written_straight_to_the_db(
+        client, make_record, db, lead):
+    """
+    export อ่านจาก DB ตรง ๆ ไม่ได้อ่านจาก request แถวที่ไม่ได้ผ่าน API จึงมีหัวค่า
+    เป็น \t หรือ \r ได้ (fix_db.py แก้ DB ตรง ๆ เป็นงานที่โปรเจกต์นี้ทำจริง)
+    ด่านของ export ต้องกันตรงจุด export ไม่ใช่ฝากความหวังไว้กับ .strip() ขาเข้า
+    """
+    make_record()
+    con = db()
+    con.execute('UPDATE records SET p1_fname=?', [lead + 'HYPERLINK("http://evil.test","x")'])
+    con.commit()
+    con.close()
+    body = client.get('/api/export/csv').get_data().decode('utf-8-sig')
+    cells = [c for row in csv.reader(io.StringIO(body)) for c in row]
+    dangerous = [c for c in cells if c[:1] in FORMULA_LEADERS]
+    assert dangerous == [], 'cell ที่ Excel จะรันเป็นสูตร: %r' % dangerous
+
+
+def test_item15_ordinary_values_are_left_alone(client, make_record):
+    """กันการแก้เกินเลย — ค่าปกติต้องไม่ถูกเติมอะไรนำหน้า"""
+    make_record(p1_fname='สมหญิง', p2_empid='12345')
+    body = client.get('/api/export/csv').get_data().decode('utf-8-sig')
+    cells = [c for row in csv.reader(io.StringIO(body)) for c in row]
+    assert 'สมหญิง' in cells
+    assert '12345' in cells
+
+
+# ────────────────────────────────────────────────
+# ข้อ 16 และ 18 — index และกฎหนึ่งช่องหนึ่งไฟล์ที่ schema
+# ────────────────────────────────────────────────
+
+def test_item16_record_id_lookup_uses_an_index(db):
+    """
+    WHERE record_id=? เป็น query หลักของตาราง attachments และ ON DELETE CASCADE
+    ก็ใช้ทางเดียวกัน ถ้าไม่มี index ทั้งคู่ต้อง full scan ซึ่งช้าเป็น O(n) เมื่อไฟล์สะสมขึ้น
+    """
+    con = db()
+    plan = ' '.join(str(r[-1]) for r in con.execute(
+        'EXPLAIN QUERY PLAN SELECT id FROM attachments WHERE record_id=?', [1]).fetchall())
+    con.close()
+    assert 'SCAN' not in plan, plan
+    assert 'USING' in plan and 'INDEX' in plan, plan
+
+
+def test_item18_schema_rejects_two_files_in_one_slot(db, make_record):
+    """
+    กฎ "หนึ่ง record มีไฟล์ได้ช่องละหนึ่งไฟล์" ต้องถูกบังคับที่ schema ไม่ใช่ลำดับ
+    DELETE แล้ว INSERT ในโค้ด — เขียนตรงเข้า DB ก็ต้องถูกปฏิเสธ
+    """
+    rid = make_record()
+    con = db()
+    con.execute('INSERT INTO attachments (record_id, book_no, filename, stored_name) '
+                'VALUES (?,?,?,?)', [rid, '1', 'a.pdf', 'a.pdf'])
+    con.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        con.execute('INSERT INTO attachments (record_id, book_no, filename, stored_name) '
+                    'VALUES (?,?,?,?)', [rid, '1', 'b.pdf', 'b.pdf'])
+        con.commit()
+    con.close()
+
+
+def test_item18_different_slots_and_records_still_allowed(db, make_record):
+    """กันการแก้เกินเลย — UNIQUE ต้องคุมแค่คู่ (record_id, book_no) ไม่ใช่ทั้งคอลัมน์"""
+    r1, r2 = make_record(), make_record(p2_empid='999')
+    con = db()
+    for rid, slot in [(r1, '1'), (r1, '2'), (r1, 'ann'), (r2, '1')]:
+        con.execute('INSERT INTO attachments (record_id, book_no, filename, stored_name) '
+                    'VALUES (?,?,?,?)', [rid, slot, 'f.pdf', '%s_%s.pdf' % (rid, slot)])
+    con.commit()
+    assert con.execute('SELECT COUNT(*) FROM attachments').fetchone()[0] == 4
+    con.close()
+
+
+# ────────────────────────────────────────────────
+# ข้อ 18 — book_no ต้องอยู่ในช่องที่ UI มีจริง
+# ────────────────────────────────────────────────
+
+@pytest.mark.parametrize('slot', ['1', '2', '3', 'ann'])
+def test_item18_accepts_the_four_real_slots(client, make_record, upload, slot):
+    rid = make_record()
+    assert upload(rid, book_no=slot).status_code == 201
+
+
+@pytest.mark.parametrize('slot', ['ขยะ', '../../etc/passwd', '99', '', 'x' * 60, '0'])
+def test_item18_rejects_slots_the_ui_cannot_show(client, make_record, upload, uploads, db, slot):
+    """
+    book_no มาจาก client ตรง ๆ UI มีแค่ 4 ช่อง (1-3 และ ann) แต่ server รับอะไรก็ได้
+    ช่องที่ UI แสดงไม่ได้ = ไฟล์ที่ผู้ใช้มองไม่เห็นและลบไม่ได้ ต้องปฏิเสธตั้งแต่ก่อนแตะดิสก์
+    """
+    rid = make_record()
+    r = upload(rid, book_no=slot)
+    assert r.status_code == 400
+    assert uploads() == [], 'ปฏิเสธแล้วต้องไม่มีไฟล์ขยะเหลือ'
+    con = db()
+    assert con.execute('SELECT COUNT(*) FROM attachments').fetchone()[0] == 0
+    con.close()
+
+
+def test_item18_migration_dedupes_before_adding_the_unique_index(tmp_path, monkeypatch):
+    """
+    DB ที่มีอยู่แล้วอาจมีคู่ (record_id, book_no) ซ้ำอยู่ก่อน ถ้าสร้าง UNIQUE index ตรง ๆ
+    จะล้มทั้ง init_db แอปเปิดไม่ขึ้นเลย migration จึงต้องรวบให้เหลือแถวใหม่สุดก่อน
+    แล้วลบไฟล์ของแถวที่ทิ้ง (หลัง commit ตาม invariant ของ file storage)
+    """
+    monkeypatch.setattr(hr, 'DB_PATH', str(tmp_path / 'dup.db'))
+    monkeypatch.setattr(hr, 'UPLOAD_FOLDER', str(tmp_path / 'up'))
+    os.makedirs(hr.UPLOAD_FOLDER, exist_ok=True)
+    hr.init_db()
+
+    con = sqlite3.connect(hr.DB_PATH)
+    con.execute('INSERT INTO records (p1_fname, p1_lname, p2_pos_current, p2_empid) '
+                "VALUES ('ก','ข','ค','1')")
+    rid = con.execute('SELECT id FROM records').fetchone()[0]
+    con.execute('DROP INDEX IF EXISTS idx_att_record_book')      # ย้อนสภาพเป็น DB ก่อนแก้
+    for name in ('old.pdf', 'mid.pdf', 'new.pdf'):
+        open(os.path.join(hr.UPLOAD_FOLDER, name), 'wb').close()
+        con.execute('INSERT INTO attachments (record_id, book_no, filename, stored_name) '
+                    'VALUES (?,?,?,?)', [rid, '1', name, name])
+    con.commit()
+    con.close()
+
+    hr.init_db()                                                  # ต้องไม่โยน exception
+
+    con = sqlite3.connect(hr.DB_PATH)
+    rows = con.execute('SELECT stored_name FROM attachments WHERE record_id=?', [rid]).fetchall()
+    idx = con.execute("SELECT name FROM sqlite_master WHERE type='index' "
+                      "AND name='idx_att_record_book'").fetchone()
+    con.close()
+    assert [r[0] for r in rows] == ['new.pdf'], 'ต้องเหลือแถวใหม่สุดแถวเดียว'
+    assert idx is not None, 'unique index ต้องถูกสร้างหลังรวบแถวซ้ำ'
+    assert sorted(os.listdir(hr.UPLOAD_FOLDER)) == ['new.pdf'], 'ไฟล์ของแถวที่ทิ้งต้องถูกลบ'
+
+
+def test_item18_concurrent_uploads_to_one_slot_leave_no_orphan_files(
+        client, make_record, uploads, db):
+    """
+    sqlite serialise ตัวเขียนอยู่แล้ว จึงไม่เคยเกิดสองแถวในช่องเดียวตามที่รีวิวคาดไว้
+    ของจริงที่เกิดคือ **ไฟล์กำพร้า**: แต่ละ request อ่าน stored_name เก่าใน snapshot
+    ของตัวเองก่อนจะได้ write lock หลาย request จึงเห็นค่าเดียวกัน แล้วไฟล์ที่ผู้แพ้
+    แทนที่ไปก็ไม่มีใครลบ invariant ที่ต้องจริงเสมอคือ ไฟล์บนดิสก์ = แถวใน DB
+    """
+    rid = make_record()
+    codes, lock = [], threading.Lock()
+    start = threading.Barrier(6)
+
+    def go(i):
+        start.wait()
+        r = client.post('/api/records/%d/attachments' % rid,
+                        data={'book_no': '1',
+                              'file': (io.BytesIO(b'%PDF-1.4 ' + str(i).encode()), 'f.pdf')},
+                        content_type='multipart/form-data')
+        with lock:
+            codes.append(r.status_code)
+
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    con = db()
+    stored = {r[0] for r in con.execute(
+        'SELECT stored_name FROM attachments WHERE record_id=?', [rid]).fetchall()}
+    con.close()
+    on_disk = set(uploads())
+    assert codes.count(201) == 6
+    assert len(stored) == 1, 'ช่องเดียวต้องเหลือแถวเดียว'
+    assert on_disk == stored, 'ไฟล์กำพร้า: %r' % sorted(on_disk - stored)
+
+
+# ────────────────────────────────────────────────
+# ข้อ 20 — DELETE เป็น idempotent, PUT ไม่ใช่
+# ────────────────────────────────────────────────
+
+def test_item20_delete_missing_record_reports_success(client):
+    r = client.delete('/api/records/9999')
+    assert r.status_code == 200
+    assert r.get_json() == {'ok': True}
+
+
+def test_item20_deleting_twice_reports_success_both_times(client, make_record):
+    rid = make_record()
+    assert client.delete('/api/records/%d' % rid).status_code == 200
+    assert client.delete('/api/records/%d' % rid).status_code == 200
+
+
+def test_item20_delete_is_idempotent_but_update_is_not(client):
+    """
+    ความต่างนี้จงใจ ไม่ใช่ลืมเช็ก: DELETE บอกว่า "ขอให้ของชิ้นนี้ไม่มีอยู่"
+    ซึ่งเป็นจริงอยู่แล้วเมื่อไม่พบ id จึงสำเร็จ แต่ PUT บอกว่า "ขอให้ของชิ้นนี้
+    มีค่าใหม่" ซึ่งทำไม่ได้เลยถ้าไม่มีแถวให้ถือค่า จึงต้องเป็น 404
+    """
+    assert client.delete('/api/records/9999').status_code == 200
+    assert client.put('/api/records/9999', json=VALID_RECORD).status_code == 404
+
+
+def test_item20_every_delete_route_answers_the_same_way(client):
+    assert client.delete('/api/records/9999').status_code == 200
+    assert client.delete('/api/attachments/9999').status_code == 200
+
+
+# ────────────────────────────────────────────────
+# ข้อ 22 — รอให้ port เปิดจริง ไม่ใช่เดาเวลา
+# ────────────────────────────────────────────────
+
+def test_item22_returns_once_the_port_accepts():
+    with socket.socket() as srv:
+        srv.bind(('127.0.0.1', 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        t0 = time.perf_counter()
+        assert hr._wait_for_port(port, timeout=2.0) is True
+        assert time.perf_counter() - t0 < 0.5, 'port เปิดอยู่แล้วต้องไม่หน่วง'
+
+
+def test_item22_keeps_retrying_until_the_ceiling():
+    """
+    ยืนยันว่า "รอ" จริง ไม่ใช่ลองครั้งเดียวแล้วเลิก — เครื่องช้าหรือ antivirus
+    ที่สแกนอยู่คือเคสที่ข้อนี้ต้องกัน ซึ่งการลองครั้งเดียวแก้ไม่ได้
+    """
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+
+    t0 = time.perf_counter()
+    assert hr._wait_for_port(port, timeout=0.3) is False
+    elapsed = time.perf_counter() - t0
+    assert elapsed >= 0.3, 'เลิกเร็วเกินไป (%.3fs) แปลว่าไม่ได้วนรอ' % elapsed
+    assert elapsed < 2.0, 'วนเกิน timeout ที่สั่งไว้ (%.3fs)' % elapsed
+
+
+def test_item22_window_opens_even_when_the_server_never_answers(monkeypatch):
+    """
+    ผลเสียของการเปลี่ยนจาก sleep คงที่มาเป็นการรอ คือถ้ารอไม่มีเพดาน
+    หน้าต่างจะไม่เปิดเลย ซึ่งแย่กว่าเดิม — ต้องเปิดต่อแม้ server ไม่ตอบ
+    """
+    calls = []
+    monkeypatch.setattr(hr, 'HAS_WEBVIEW', True)
+    monkeypatch.setattr(hr, 'webview', types.SimpleNamespace(
+        create_window=lambda **kw: calls.append('create_window'),
+        start=lambda **kw: calls.append('start'),
+    ), raising=False)
+    monkeypatch.setattr(hr, 'run_flask', lambda: time.sleep(5))
+    monkeypatch.setattr(hr, '_setup_logging', lambda: None)
+    monkeypatch.setattr(hr, 'init_db', lambda: None)
+    monkeypatch.setattr(hr, '_wait_for_port', lambda *a, **kw: False)
+
+    hr.main()
+
+    assert calls == ['create_window', 'start']
+
+
+# ────────────────────────────────────────────────
+# ข้อ 25 — กฎฟิลด์บังคับต้องมีชุดเดียว
+# ────────────────────────────────────────────────
+
+TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'templates', 'index.html')
+
+
+def _template_source():
+    with io.open(TEMPLATE, encoding='utf-8') as f:
+        return f.read()
+
+
+def _rendered_required_list(client):
+    """ดึงรายการฟิลด์บังคับที่ server ฝังมากับหน้าเว็บ"""
+    html = client.get('/').get_data(as_text=True)
+    m = re.search(r'<script type="application/json" id="required-fields">(.*?)</script>',
+                  html, re.S)
+    assert m, 'หน้าเว็บไม่ได้ฝังรายการฟิลด์บังคับมาด้วย client จึงไม่มีทางรู้กฎเดียวกับ server'
+    return json.loads(m.group(1))
+
+
+def test_item25_payload_matches_the_server_list():
+    """
+    VALID_RECORD ใน conftest เขียนคีย์ไว้ตรง ๆ ไม่ได้ derive มาจาก REQUIRED_FIELDS
+    ถ้าสองฝั่งหลุดจากกัน test ตัวนี้จะเป็นตัวที่บอก แทนที่จะให้ fixture พังเป็นสิบจุด
+    """
+    assert set(hr.REQUIRED_FIELDS) == set(VALID_RECORD)
+
+
+def test_item25_server_enforces_what_the_form_asks_for(client):
+    """
+    ฟอร์มขึ้นดอกจัน 13 ช่องแล้วไม่ยอมให้บันทึกถ้าไม่ครบ นั่นคือกฎที่ผู้ใช้เจอจริง
+    ส่วน server เคยบังคับแค่ 4 ช่อง กฎเดียวกันจึงถูกเขียนไว้สองที่ด้วยค่าไม่เท่ากัน
+
+    เทียบเป็น list ของคู่ ไม่ใช่ dict เพราะลำดับคือส่วนหนึ่งของสัญญา: ข้อความบอก
+    ฟิลด์ที่ยังว่างต้องไล่ตามลำดับช่องในฟอร์มเหมือนกันทั้งสองฝั่ง
+    """
+    assert _rendered_required_list(client) == [list(p) for p in hr.REQUIRED_FIELDS.items()]
+
+
+def test_item25_form_markup_has_no_second_copy_of_the_rule():
+    """
+    ดอกจันกับ attribute `required` ใน HTML เป็นสำเนาที่สามของกฎเดียวกัน
+    ต้องมาจากรายการฝั่ง server ตอน runtime ไม่ใช่พิมพ์ค้างไว้ใน markup
+    """
+    src = _template_source()
+    assert 'form-label required' not in src
+    assert re.search(r'<(input|select|textarea)[^>]*required', src) is None
+
+
+def test_item25_every_required_field_has_an_input_in_the_form(client):
+    """
+    ฟิลด์ที่ server บังคับแต่ฟอร์มไม่มีช่องให้กรอก = ผู้ใช้บันทึกไม่ได้และแก้เองไม่ได้
+    """
+    src = _template_source()
+    for col, _label in _rendered_required_list(client):
+        assert 'id="%s"' % col in src, col
+
+
+def test_item25_labels_are_unique():
+    """
+    `ตำแหน่งเลขที่` มีสองช่อง (ส่วนที่ 2 และส่วนที่ 3) ถ้าป้ายซ้ำกัน ข้อความ error
+    จะบอกชื่อเดียวกันสองครั้งโดยไม่มีทางรู้ว่าช่องไหน
+    """
+    labels = list(hr.REQUIRED_FIELDS.values())
+    assert len(set(labels)) == len(labels)
+
+
+def test_item25_post_with_only_the_old_four_fields_is_rejected(client):
+    r = client.post('/api/records', json={
+        'p1_fname': 'ก', 'p1_lname': 'ข', 'p2_pos_current': 'ค', 'p2_empid': '1'})
+    assert r.status_code == 422
+    assert 'คำนำหน้า' in r.get_json()['missing']
+
+
+def test_item25_put_with_only_the_old_four_fields_is_rejected(client, make_record):
+    rid = make_record()
+    r = client.put('/api/records/%d' % rid, json={
+        'p1_fname': 'ก', 'p1_lname': 'ข', 'p2_pos_current': 'ค', 'p2_empid': '1'})
+    assert r.status_code == 422
+
+
+def test_item25_full_record_is_accepted(client):
+    assert client.post('/api/records', json=VALID_RECORD).status_code == 201
+def test_item25_error_message_stays_under_the_toast_limit(client):
+    """
+    ไล่ชื่อครบทั้ง 13 ช่องยาว 303 ตัวอักษร ซึ่งทะลุเพดาน 80 ของ toastError
+    = เปิด alert() ทับหน้าจอ รายชื่อเต็มจึงย้ายไปอยู่ใน `missing`
+    """
+    body = client.post('/api/records', json={}).get_json()
+    assert len(body['missing']) == len(hr.REQUIRED_FIELDS)
+    assert len(body['error']) < MAX_CLIENT_MESSAGE
+
+
+def test_item25_single_missing_field_is_named(client):
+    """ขาดช่องเดียวยังสั้นพอที่จะบอกชื่อช่องตรง ๆ ซึ่งมีประโยชน์กว่าบอกจำนวน"""
+    r = client.post('/api/records', json=dict(VALID_RECORD, p1_lname=''))
+    assert r.status_code == 422
+    assert r.get_json()['error'] == 'กรุณากรอกนามสกุล'
+    assert len(r.get_json()['error']) < MAX_CLIENT_MESSAGE
+# ────────────────────────────────────────────────
+# ข้อ 8 — migration ที่ล้มกลางทางต้องไม่ทิ้งไฟล์กำพร้าไว้
+# ────────────────────────────────────────────────
+
+BLOB_SCHEMA = """
+    CREATE TABLE attachments (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id   INTEGER NOT NULL,
+        book_no     TEXT    NOT NULL,
+        filename    TEXT    NOT NULL,
+        mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
+        file_size   INTEGER,
+        file_data   BLOB    NOT NULL,
+        uploaded_at TEXT,
+        FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+    )
+"""
+
+BLOBS = ['%PDF-1.4 เล่มที่หนึ่ง'.encode('utf-8'), '%PDF-1.4 เล่มที่สอง'.encode('utf-8')]
+
+
+def _revert_to_blob_schema(db):
+    """
+    พา DB กลับไปเป็น schema ยุค BLOB เพื่อให้ init_db() เรียก migration จริง
+    (สร้างมือทั้งไฟล์จะต้องลอก schema ของ records มาด้วย ซึ่งไม่เกี่ยวกับข้อนี้เลย)
+    """
+    con = db()
+    rid = con.execute("INSERT INTO records (p1_fname, p1_lname) VALUES ('ก', 'ข')").lastrowid
+    con.execute('DROP TABLE attachments')
+    con.execute(BLOB_SCHEMA)
+    for i, blob in enumerate(BLOBS):
+        con.execute(
+            'INSERT INTO attachments (record_id, book_no, filename, file_size, file_data, '
+            'uploaded_at) VALUES (?,?,?,?,?,?)',
+            [rid, str(i + 1), 'ผลงาน%d.pdf' % (i + 1), len(blob), blob, '01/01/2026 00:00'])
+    con.commit()
+    con.close()
+    return rid
+
+
+def test_item8_migration_moves_each_blob_to_its_own_file(hr_app, db, uploads):
+    """เส้นทางปกติก่อน — ถ้าอันนี้ไม่ผ่าน test ที่เหลือก็ไม่ได้วัดอะไร"""
+    _revert_to_blob_schema(db)
+    hr.init_db()
+
+    files = uploads()
+    assert len(files) == len(BLOBS)
+    con = db()
+    rows = con.execute('SELECT stored_name FROM attachments ORDER BY id').fetchall()
+    cols = {r[1] for r in con.execute('PRAGMA table_info(attachments)')}
+    con.close()
+    assert 'file_data' not in cols
+    assert sorted(r['stored_name'] for r in rows) == sorted(files)
+    on_disk = []
+    for name in files:
+        with open(os.path.join(hr.UPLOAD_FOLDER, name), 'rb') as f:
+            on_disk.append(f.read())
+    assert sorted(on_disk) == sorted(BLOBS)
+
+
+def test_item8_failed_migration_leaves_no_orphan_files(hr_app, db, uploads, fail_sql):
+    """
+    ไฟล์บนดิสก์ไม่มี transaction ให้ rollback ถ้า migration ล้มหลังเขียนไฟล์ไปแล้ว
+    DB ถอนกลับเองได้ แต่ไฟล์ชุดนั้นค้างอยู่โดยไม่มีแถวไหนชี้ถึง
+    """
+    _revert_to_blob_schema(db)
+    fail_sql('INSERT INTO ATTACHMENTS_V2')
+    with pytest.raises(Exception):
+        hr.init_db()
+
+    assert uploads() == []
+
+
+def test_item8_failed_migration_leaves_the_old_schema_intact(hr_app, db, uploads, fail_sql):
+    """BLOB ต้องยังอยู่ครบ ไม่งั้นผลงานของผู้ใช้หายไปกับ migration ที่ล้ม"""
+    _revert_to_blob_schema(db)
+    fail_sql('INSERT INTO ATTACHMENTS_V2')
+    with pytest.raises(Exception):
+        hr.init_db()
+    fail_sql.disarm()
+
+    con = db()
+    cols = {r[1] for r in con.execute('PRAGMA table_info(attachments)')}
+    rows = con.execute('SELECT file_data, stored_name FROM attachments ORDER BY id').fetchall()
+    con.close()
+    assert 'file_data' in cols
+    assert sorted(bytes(r['file_data']) for r in rows) == sorted(BLOBS)
+    # ไม่มีแถวไหนถือ stored_name ค้างไว้ — นี่คือเหตุผลที่ WHERE ที่รีวิวเสนอกรองอะไรไม่ได้เลย
+    assert all(not r['stored_name'] for r in rows)
+
+
+def test_item8_rerun_after_a_failure_writes_one_file_per_row(hr_app, db, uploads, fail_sql):
+    """
+    รันใหม่หลังแก้สาเหตุแล้วต้องได้ไฟล์เท่าจำนวนแถว ไม่ใช่สองเท่า
+    ("กินพื้นที่เท่าตัวทุกรอบที่ล้ม" ตามที่รีวิวข้อนี้กังวลไว้)
+    """
+    _revert_to_blob_schema(db)
+    fail_sql('INSERT INTO ATTACHMENTS_V2')
+    with pytest.raises(Exception):
+        hr.init_db()
+    fail_sql.disarm()
+
+    hr.init_db()
+
+    files = uploads()
+    assert len(files) == len(BLOBS)
+    con = db()
+    rows = con.execute('SELECT stored_name FROM attachments ORDER BY id').fetchall()
+    con.close()
+    assert sorted(r['stored_name'] for r in rows) == sorted(files)
+

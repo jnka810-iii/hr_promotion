@@ -738,6 +738,12 @@ def delete_record(rid):
     (ถ้าลบไฟล์พลาด _safe_remove จะกลืน error → อย่างแย่คือไฟล์กำพร้า
     แต่ข้อมูลใน DB ยัง consistent เสมอ)
 
+    และจงใจตอบ 200 แม้ไม่พบ id เหมือน delete_attachment เพราะ DELETE เป็น
+    idempotent: สิ่งที่ client ขอคือ "ให้ record นี้ไม่มีอยู่" ซึ่งเป็นจริงอยู่แล้ว
+    ต่างจาก update_record ที่ตอบ 404 เพราะ PUT ขอให้ record ถือค่าใหม่
+    ซึ่งทำให้เป็นจริงไม่ได้เลยถ้าไม่มีแถวอยู่ ความต่างนี้จึงไม่ใช่การลืมเช็ก
+    (มี test กันไว้ทั้งสองฝั่ง — `-k item20`)
+
     Parameters:
         rid (int): id ของ record ที่จะลบ
 

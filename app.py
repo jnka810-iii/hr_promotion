@@ -516,13 +516,29 @@ RECORD_COLS = {
     'eval51_rows', 'eval52_rows',
 }
 
-# ฟิลด์บังคับฝั่ง server (ขั้นต่ำกว่าฝั่ง frontend ซึ่งบังคับมากกว่า) —
-# map คอลัมน์ → ป้ายชื่อภาษาไทย ใช้ประกอบข้อความ error ให้ผู้ใช้อ่านรู้เรื่อง
+# ฟิลด์บังคับ — map คอลัมน์ → ป้ายชื่อภาษาไทย ใช้ประกอบข้อความ error ให้ผู้ใช้อ่านรู้เรื่อง
+#
+# **Invariant:** นี่คือ "ที่เดียว" ที่กฎนี้ถูกเขียนไว้ หน้าเว็บรับรายการนี้ไปทาง
+# index() แล้วใช้ทั้งการขึ้นดอกจัน การตั้ง attribute required และการตรวจก่อน submit
+# ของเดิมบังคับแค่ 4 ช่องขณะที่ฟอร์มบังคับ 13 ช่อง คือกฎเดียวกันเขียนไว้สองที่
+# ด้วยค่าไม่เท่ากัน ซึ่งเพี้ยนเพิ่มทุกครั้งที่มีคนแก้ฝั่งเดียว
+#
+# ลำดับคีย์เรียงตามลำดับช่องในฟอร์ม เพราะข้อความ error ไล่ชื่อฟิลด์ตามลำดับนี้
+# ป้ายต้องไม่ซ้ำกัน: `ตำแหน่งเลขที่` มีสองช่อง ถ้าป้ายเหมือนกันผู้ใช้จะไม่รู้ว่าช่องไหน
 REQUIRED_FIELDS = {
-    'p1_fname':       'ชื่อ',
-    'p1_lname':       'นามสกุล',
-    'p2_pos_current': 'ตำแหน่งปัจจุบัน',
-    'p2_empid':       'ตำแหน่งเลขที่',
+    'p1_title':         'คำนำหน้า',
+    'p1_fname':         'ชื่อ',
+    'p1_lname':         'นามสกุล',
+    'p2_pos_current':   'ตำแหน่งปัจจุบัน',
+    'p2_pos_level':     'ระดับตำแหน่งปัจจุบัน',
+    'p2_empid':         'ตำแหน่งเลขที่ (ส่วนที่ 2)',
+    'p2_dept':          'กลุ่มงาน (ส่วนที่ 2)',
+    'p2_sec':           'สำนัก/กอง/ศูนย์ (ส่วนที่ 2)',
+    'p3_pos':           'ตำแหน่งที่ได้รับเลือก',
+    'p3_pos_level':     'ระดับตำแหน่ง (ส่วนที่ 3)',
+    'p3_empid':         'ตำแหน่งเลขที่ (ส่วนที่ 3)',
+    'p4_work1_title':   'ผลงานที่ผ่านมาเรื่องที่ 1',
+    'p4_concept_title': 'เรื่องที่เป็นข้อเสนอแนวคิด',
 }
 
 def sanitize_record(d: dict) -> dict:
@@ -583,6 +599,30 @@ def validate_required(allowed: dict) -> list:
     return [label for col, label in REQUIRED_FIELDS.items()
             if not allowed.get(col, '').strip()]
 
+def required_error(missing: list):
+    """
+    ประกอบ response 422 จากรายการฟิลด์ที่ยังว่าง
+
+    `error` ต้องสั้นกว่า 80 ตัวอักษรตาม invariant ของ `toastError` ฝั่ง frontend
+    (ยาวกว่านั้นมันเปิด `alert()` ทับหน้าจอ) การไล่ชื่อครบทั้ง 13 ช่องยาว 303
+    ตัวอักษร จึงบอกแค่จำนวนเมื่อขาดหลายช่อง และบอกชื่อตรง ๆ เมื่อขาดช่องเดียว
+    (กรณียาวสุดของสองรูปนี้คือ 45 และ 36 ตัวอักษร)
+
+    รายชื่อเต็มไม่ได้หายไป แต่ย้ายไปอยู่ใน `missing` ให้ client ที่อ่านรายละเอียด
+    เองได้ (เช่น curl) ใช้ ส่วนฟอร์มมีด่านของตัวเองที่ไล่ชื่อทุกช่องให้ผู้ใช้อยู่แล้ว
+
+    Parameters:
+        missing (list[str]): ป้ายภาษาไทยของฟิลด์ที่ยังว่าง (จาก validate_required)
+
+    Returns:
+        tuple: (Response JSON, 422)
+    """
+    if len(missing) == 1:
+        msg = 'กรุณากรอก' + missing[0]
+    else:
+        msg = 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ ยังขาด %d ช่อง' % len(missing)
+    return jsonify({'error': msg, 'missing': missing}), 422
+
 
 # ────────────────────────────────────────────────
 # Routes — Records
@@ -594,10 +634,20 @@ def index():
     หน้าแรก — serve Single Page Application ทั้งหมดจาก template เดียว
     (frontend จัดการ tab/ฟอร์ม/ตารางเองด้วย JavaScript แล้วคุยกลับมาทาง /api/*)
 
+    ส่ง REQUIRED_FIELDS ไปกับหน้าเว็บด้วย เพื่อให้ดอกจัน การตรวจของ browser และ
+    การตรวจก่อน submit อ่านกฎชุดเดียวกับที่ validate_required() ใช้จริง
+    (ฝังเป็น JSON ในหน้า ไม่ใช่ endpoint แยก เพราะหน้าเว็บต้องใช้ตั้งแต่ก่อน
+    probe รู้ว่าคุย API ได้หรือไม่ และ endpoint ที่ล้มจะทำให้ฟอร์มไม่มีกฎเลย)
+
+    ส่งเป็น list ของคู่ ไม่ใช่ dict เพราะ `tojson` ของ Jinja เรียงคีย์ใหม่ตาม
+    `app.json.sort_keys` ซึ่งค่าเริ่มต้นเป็น True ลำดับช่องในข้อความ error ฝั่ง
+    client จะกลายเป็นเรียงตามตัวอักษรแทนลำดับช่องในฟอร์ม ไม่ตรงกับฝั่ง server
+    list เก็บลำดับไว้ในตัวโครงสร้างเอง ไม่ขึ้นกับ flag ของ serializer
+
     Returns:
         str: HTML ของ templates/index.html
     """
-    return render_template('index.html')
+    return render_template('index.html', required_fields=list(REQUIRED_FIELDS.items()))
 
 @app.route('/api/records', methods=['GET'])
 def get_all():
@@ -660,7 +710,7 @@ def add_record():
     allowed = sanitize_record(d)
     missing = validate_required(allowed)
     if missing:
-        return jsonify({'error': 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ: ' + ', '.join(missing)}), 422
+        return required_error(missing)
     allowed['created'] = now_str()
     allowed['updated'] = ''
     cols = ', '.join(allowed.keys())
@@ -705,7 +755,7 @@ def update_record(rid):
     allowed = sanitize_record(d)
     missing = validate_required(allowed)
     if missing:
-        return jsonify({'error': 'กรุณากรอกข้อมูลที่จำเป็นให้ครบ: ' + ', '.join(missing)}), 422
+        return required_error(missing)
     allowed['updated'] = now_str()
     sets = ', '.join([f'{k}=?' for k in allowed.keys()])
     con  = get_db()

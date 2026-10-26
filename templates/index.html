@@ -928,8 +928,10 @@ function handleDrop(ev,n){ ev.preventDefault(); const file=ev.dataTransfer.files
  * อ่านเป็น base64 ด้วย FileReader ทำให้ไฟล์ 100 MB กิน RAM หลายร้อย MB พร้อมกัน
  * ทั้งฝั่ง browser และฝั่ง server และเป็นเหตุให้ต้องตั้ง MAX_CONTENT_LENGTH สูงถึง 200 MB
  *
- * ถ้าฟอร์มกำลังแก้ไข record เดิม (มี rec-id และเป็นโหมด Flask) → อัปโหลดทันที
- * ไม่งั้นค้างสถานะ "รอบันทึกข้อมูล" เพราะยังไม่มี record id ให้ผูกไฟล์
+ * ปลายทางของไฟล์มี 3 ทางตามโหมดและสถานะฟอร์ม:
+ *   โหมด LocalStorage → เตือนทันทีว่าโหมดนี้เก็บไฟล์ไม่ได้ (ไม่มีที่เก็บให้เลย)
+ *   โหมด Flask + กำลังแก้ไข record เดิม (มี rec-id) → อัปโหลดทันที
+ *   โหมด Flask + record ใหม่ → ค้างสถานะ "รอบันทึกข้อมูล" รอ id จากตอน submit
  * @param {File} file        ไฟล์ที่ผ่านการตรวจแล้ว
  * @param {number|string} n  เลขเล่ม
  * @returns {Promise<void>}
@@ -937,8 +939,17 @@ function handleDrop(ev,n){ ev.preventDefault(); const file=ev.dataTransfer.files
 async function _cacheFile(file,n){
   fileCache[n]={file,name:file.name,size:file.size};
   showFileUI(n,file.name,file.size);
+  if(!USE_FLASK){
+    // โหมด LocalStorage ไม่มีที่เก็บไฟล์เลย: fileCache อยู่ใน memory ของหน้านี้
+    // เท่านั้น ปิดหน้าต่างแล้วหาย ต้องบอกตรงนี้ ไม่ใช่ขึ้น "รอบันทึกข้อมูล"
+    // แบบโหมด Flask ซึ่งทำให้ผู้ใช้เข้าใจว่าแนบสำเร็จแล้วรอ save เฉย ๆ
+    showProgress(n,100);
+    setUploadStatus(n,'⚠ โหมดนี้ไม่เก็บไฟล์','danger');
+    toast('โหมด Offline เก็บไฟล์แนบไม่ได้ ไฟล์จะหายเมื่อปิดโปรแกรม','#dc3545');
+    return;
+  }
   const rid=document.getElementById('rec-id').value;
-  if(!(rid&&USE_FLASK)){
+  if(!rid){
     showProgress(n,100); setUploadStatus(n,'⏳ รอบันทึกข้อมูล','warning'); return;
   }
   const zone=document.getElementById('uzone-'+n);
@@ -1234,20 +1245,24 @@ document.getElementById('mainForm').addEventListener('submit',async e=>{
     if(rid){ await dbUpd(rid,d); savedId=rid; }
     else{ const res=await dbAdd(d); savedId=res?.id||res?._id||''; }
 
+    const pending=Object.keys(SLOTS).filter(n=>fileCache[n]?.file&&!uploadedMeta[n]?.att_id);
     const uploadFails=[];
     if(USE_FLASK&&savedId){
-      for(const n of Object.keys(SLOTS)){
-        if(fileCache[n]?.file&&!uploadedMeta[n]?.att_id){
-          const ok=await _uploadToFlask(n,savedId);
-          if(!ok) uploadFails.push(SLOTS[n].title);
-        }
+      for(const n of pending){
+        const ok=await _uploadToFlask(n,savedId);
+        if(!ok) uploadFails.push(SLOTS[n].title);
       }
     }
+    // โหมด LocalStorage ไม่เคยอัปโหลดไฟล์ clearForm ข้างล่างจะล้าง fileCache ทิ้ง
+    // ต้องสรุปให้ผู้ใช้รู้ก่อน ไม่ใช่ตอบว่า "บันทึกเรียบร้อย" ลอย ๆ ทั้งที่ไฟล์หาย
+    const dropped=USE_FLASK?[]:pending.map(n=>SLOTS[n].title);
     clearForm(); await loadAll();
     if(uploadFails.length){
       const fl=uploadFails.join(', ');
       setTimeout(()=>alert(`⚠️ บันทึกข้อมูลสำเร็จแล้ว\n\nแต่อัปโหลดไฟล์${fl}ไม่สำเร็จ\nกรุณาเปิดแก้ไขรายการนี้แล้วลองอัปโหลดไฟล์ใหม่`),200);
       toast(`⚠️ บันทึกสำเร็จ แต่ไฟล์${fl}อัปโหลดไม่สำเร็จ`,'#f59e0b');
+    } else if(dropped.length){
+      toast(`บันทึกข้อมูลแล้ว แต่ไฟล์แนบ (${dropped.join(', ')}) ไม่ถูกเก็บ — โหมด Offline`,'#f59e0b');
     } else {
       toast(rid?'อัปเดตข้อมูลเรียบร้อยแล้ว ✓':'บันทึกข้อมูลเรียบร้อยแล้ว ✓');
     }

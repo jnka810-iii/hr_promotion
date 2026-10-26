@@ -111,15 +111,24 @@ def download(client):
 
 
 class _FailOnConnection:
-    """ครอบ sqlite3.Connection แล้วโยน exception ที่กำหนด เมื่อ SQL ขึ้นต้นตาม prefix"""
+    """
+    ครอบ sqlite3.Connection แล้วโยน exception ที่กำหนด เมื่อ SQL ขึ้นต้นตาม prefix
+    และจดไว้ว่า `close()` ถูกเรียกหรือยัง — ตัวจดนี้คือสิ่งที่ทำให้ test ข้อ 11
+    มองเห็น connection ที่ route เปิดแล้วไม่ปิดได้ (ดู `_SqlFaultInjector.unclosed`)
+    """
 
     def __init__(self, con, prefix, exc):
         self._con, self._prefix, self._exc = con, prefix, exc
+        self.closed = False
 
     def execute(self, sql, *a, **kw):
         if sql.lstrip().upper().startswith(self._prefix):
             raise self._exc('simulated DB failure')
         return self._con.execute(sql, *a, **kw)
+
+    def close(self):
+        self.closed = True
+        return self._con.close()
 
     def __getattr__(self, name):
         return getattr(self._con, name)
@@ -137,9 +146,19 @@ class _SqlFaultInjector:
 
     def __init__(self):
         self._real_get_db = hr.get_db
+        self.handed_out = []
 
     def __call__(self, prefix, exc=sqlite3.OperationalError):
-        hr.get_db = lambda: _FailOnConnection(self._real_get_db(), prefix.upper(), exc)
+        def _open():
+            con = _FailOnConnection(self._real_get_db(), prefix.upper(), exc)
+            self.handed_out.append(con)
+            return con
+
+        hr.get_db = _open
+
+    def unclosed(self):
+        """connection ที่ route เปิดไปแล้วไม่ได้ปิด — ต้องว่างเสมอหลัง request จบ"""
+        return [c for c in self.handed_out if not c.closed]
 
     def disarm(self):
         hr.get_db = self._real_get_db

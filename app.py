@@ -237,7 +237,7 @@ def _migrate_blobs_to_files(con):
     0. สำเนาไฟล์ .db ไว้เป็น <db>.pre-migration.bak ก่อนแตะอะไรทั้งสิ้น
     1. ตรวจ schema เก่าด้วย PRAGMA table_info แล้วเติมคอลัมน์ stored_name ถ้ายังไม่มี
     2. loop ทุกแถว: dump BLOB → ไฟล์ UUID.pdf แล้วบันทึกชื่อไฟล์กลับลง stored_name
-       ถ้าเขียนไฟล์แถวใดพลาด → rollback, ลบไฟล์ที่เขียนไปแล้ว, raise ทันที
+       ถ้าเขียนไฟล์แถวใดพลาด → raise ทันที (การเก็บกวาดอยู่ที่ except ที่เดียว)
        เหตุผลอยู่ที่ขั้นตอน 5 ซึ่งลบคอลัมน์ file_data ทิ้ง ถ้าปล่อยให้แถวที่พลาดผ่านไป
        BLOB ของแถวนั้นจะหายถาวรโดยไม่มีสัญญาณเตือนใด ๆ
     3. DROP ตารางชั่วคราว attachments_v2 ที่อาจค้างจาก migration ที่ล้มเหลวรอบก่อน
@@ -249,12 +249,25 @@ def _migrate_blobs_to_files(con):
     เหตุผลที่ต้องสร้างตารางใหม่แทน ALTER: SQLite ไม่รองรับ DROP COLUMN
     (ในเวอร์ชันเก่า) — การ rebuild ตารางคือวิธีมาตรฐานของ SQLite
 
+    **Invariant:** ล้มที่ขั้นไหนก็ตาม ต้องไม่เหลือไฟล์ที่ไม่มีแถวไหนชี้ถึงอยู่บนดิสก์
+    ทุกขั้นหลังขั้นที่ 0 อยู่ใน transaction เดียว DB จึงถอนตัวเองกลับได้ แต่ไฟล์บนดิสก์
+    ไม่มี transaction ให้ถอน การเก็บกวาดจึงต้องเขียนเอง และต้องครอบทุกทางที่ล้มได้
+    ไม่ใช่แค่ทางที่เขียนไฟล์พลาด (วัดก่อนแก้ ด้วยการให้ INSERT..SELECT ล้ม: ล้มหนึ่งรอบ
+    เหลือไฟล์กำพร้าเท่าจำนวนแถว รันใหม่อีกรอบได้ไฟล์เป็นสองเท่าของแถว)
+
+    นี่คือความหมายที่ใช้ได้จริงของคำว่า "รันซ้ำได้" ของฟังก์ชันนี้ ไม่ใช่การเติม
+    WHERE stored_name = '' เพื่อข้ามแถวที่เคยย้ายแล้ว — เงื่อนไขนั้นกรองอะไรไม่ได้เลย
+    เพราะไม่มีสถานะกลางให้กรอง: ทุกรอบที่ล้ม rollback คืนค่า stored_name เป็นค่าว่าง
+    ให้ทุกแถวอยู่แล้ว สิ่งที่รอดจาก rollback คือไฟล์ ไม่ใช่ค่าในคอลัมน์
+
     Parameters:
         con (sqlite3.Connection): connection ที่เปิดอยู่ (ฟังก์ชันนี้ commit เอง แต่ไม่ close)
 
     Raises:
         RuntimeError: สำรองไฟล์ DB ไม่ได้ หรือเขียนไฟล์แนบไม่ครบทุกแถว
-                      ทั้งสองกรณี DB เดิมยังอยู่ครบ ผู้ใช้แก้สาเหตุแล้วเปิดแอปใหม่ได้
+        Exception: ข้อผิดพลาดของ DB ในขั้นที่ 3-5 ถูกโยนต่อตามเดิมเพื่อเก็บ traceback
+                   ของต้นเหตุไว้ (log ที่ main() ตั้งไว้เป็นที่เดียวที่เหลือให้สืบ)
+        ทุกกรณี DB เดิมยังอยู่ครบและไม่มีไฟล์กำพร้าค้าง ผู้ใช้แก้สาเหตุแล้วเปิดแอปใหม่ได้
 
     Returns:
         None (side effect: โครงสร้างตาราง attachments เปลี่ยน + ไฟล์ถูกเขียนลงดิสก์)
@@ -274,74 +287,83 @@ def _migrate_blobs_to_files(con):
 
     att_cols = {row[1] for row in con.execute("PRAGMA table_info(attachments)").fetchall()}
 
-    if 'stored_name' not in att_cols:
-        con.execute("ALTER TABLE attachments ADD COLUMN stored_name TEXT NOT NULL DEFAULT ''")
-        att_cols.add('stored_name')
+    # ไฟล์ที่เขียนลงดิสก์แล้วในรอบนี้ — ต้องเก็บกวาดถ้าอะไรข้างล่างล้ม ไม่ว่าล้มที่ขั้นไหน
+    written = []
+    try:
+        if 'stored_name' not in att_cols:
+            con.execute("ALTER TABLE attachments ADD COLUMN stored_name TEXT NOT NULL DEFAULT ''")
+            att_cols.add('stored_name')
 
-    # ย้าย BLOB → file
-    rows = con.execute("SELECT id, filename, file_data FROM attachments").fetchall()
-    written, failed = [], []
-    for row in rows:
-        stored = uuid.uuid4().hex + '.pdf'
-        path   = _stored_path(stored)
-        try:
-            data = bytes(row['file_data']) if row['file_data'] else b''
-            with open(path, 'wb') as f:
-                f.write(data)
-        except Exception as e:
-            failed.append(f"id={row['id']} ({row['filename']}): {e}")
-            continue
-        written.append(path)
-        con.execute("UPDATE attachments SET stored_name=? WHERE id=?", [stored, row['id']])
+        # ย้าย BLOB → file
+        rows = con.execute("SELECT id, filename, file_data FROM attachments").fetchall()
+        failed = []
+        for row in rows:
+            stored = uuid.uuid4().hex + '.pdf'
+            path   = _stored_path(stored)
+            try:
+                data = bytes(row['file_data']) if row['file_data'] else b''
+                with open(path, 'wb') as f:
+                    f.write(data)
+            except Exception as e:
+                failed.append(f"id={row['id']} ({row['filename']}): {e}")
+                continue
+            written.append(path)
+            con.execute("UPDATE attachments SET stored_name=? WHERE id=?", [stored, row['id']])
 
-    # เขียนไฟล์ไม่ครบ = ห้ามไปต่อเด็ดขาด เพราะขั้นถัดไปลบคอลัมน์ file_data ทิ้ง
-    # เวอร์ชันก่อนหน้าตั้ง stored_name='' แล้วเดินหน้าต่อ ทำให้ PDF ของแถวที่เขียนพลาดหายถาวร
-    # โดยผู้ใช้ไม่รู้ตัวจนกดดาวน์โหลดแล้วเจอ 'ไฟล์หายจาก storage' ซึ่งสายไปแล้ว
-    # ยอมให้แอปเปิดไม่ขึ้นแล้วผู้ใช้ไปแก้สาเหตุ (ดิสก์เต็ม / สิทธิ์ / antivirus) ดีกว่าข้อมูลหาย
-    if failed:
-        con.rollback()                      # SQLite rollback DDL ได้ ALTER TABLE ข้างบนจึงถูกถอนด้วย
+        # เขียนไฟล์ไม่ครบ = ห้ามไปต่อเด็ดขาด เพราะขั้นถัดไปลบคอลัมน์ file_data ทิ้ง
+        # เวอร์ชันก่อนหน้าตั้ง stored_name='' แล้วเดินหน้าต่อ ทำให้ PDF ของแถวที่เขียนพลาดหายถาวร
+        # โดยผู้ใช้ไม่รู้ตัวจนกดดาวน์โหลดแล้วเจอ 'ไฟล์หายจาก storage' ซึ่งสายไปแล้ว
+        # ยอมให้แอปเปิดไม่ขึ้นแล้วผู้ใช้ไปแก้สาเหตุ (ดิสก์เต็ม / สิทธิ์ / antivirus) ดีกว่าข้อมูลหาย
+        if failed:
+            raise RuntimeError(
+                f'migration ล้มเหลว เขียนไฟล์แนบไม่สำเร็จ {len(failed)} จาก {len(rows)} รายการ '
+                f'ข้อมูลเดิมยังอยู่ครบ สำเนาอยู่ที่ {backup} — ' + ' | '.join(failed)
+            )
+
+        # ลบตารางชั่วคราวถ้าค้างจาก migration ที่ล้มเหลวก่อนหน้า
+        con.execute("DROP TABLE IF EXISTS attachments_v2")
+
+        # สร้างตารางใหม่โดยไม่มี file_data
+        con.execute("""
+            CREATE TABLE attachments_v2 (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id   INTEGER NOT NULL,
+                book_no     TEXT    NOT NULL,
+                filename    TEXT    NOT NULL,
+                stored_name TEXT    NOT NULL DEFAULT '',
+                mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
+                file_size   INTEGER,
+                uploaded_at TEXT,
+                FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+            )
+        """)
+
+        # INSERT เฉพาะคอลัมน์ที่มีอยู่จริงใน schema เก่า
+        src_map = {
+            'id':          'id',
+            'record_id':   'record_id',
+            'book_no':     'CAST(book_no AS TEXT)',
+            'filename':    'filename',
+            'stored_name': "COALESCE(stored_name, '')",
+            'mime_type':   "'application/pdf'" if 'mime_type'   not in att_cols else 'mime_type',
+            'file_size':   'file_size'          if 'file_size'  in att_cols     else 'NULL',
+            'uploaded_at': 'NULL'               if 'uploaded_at' not in att_cols else 'uploaded_at',
+        }
+        dst_cols = ', '.join(src_map.keys())
+        src_expr = ', '.join(src_map.values())
+        con.execute(f"INSERT INTO attachments_v2 ({dst_cols}) SELECT {src_expr} FROM attachments")
+        con.execute("DROP TABLE attachments")
+        con.execute("ALTER TABLE attachments_v2 RENAME TO attachments")
+        con.commit()
+    except Exception:
+        # ล้มที่ขั้นไหนก็ตามมาจบที่นี่ที่เดียว: rollback คืนสภาพ DB (SQLite ถอน DDL ได้
+        # ALTER TABLE ข้างบนจึงถูกถอนด้วย) แต่ไฟล์ที่เขียนลงดิสก์แล้วไม่มี transaction
+        # ให้ถอน ถ้าปล่อยไว้มันจะไม่มีแถวไหนชี้ถึงตลอดไป และการรันใหม่จะเขียนชุดใหม่
+        # ด้วย UUID ใหม่ = เปลืองพื้นที่เพิ่มขึ้นเท่าจำนวนแถวต่อการล้มหนึ่งรอบ
+        con.rollback()
         for p in written:
-            _safe_remove(p)                 # เก็บกวาดไฟล์ที่เขียนไปแล้ว ให้รันใหม่ได้จากสถานะสะอาด
-        raise RuntimeError(
-            f'migration ล้มเหลว เขียนไฟล์แนบไม่สำเร็จ {len(failed)} จาก {len(rows)} รายการ '
-            f'ข้อมูลเดิมยังอยู่ครบ สำเนาอยู่ที่ {backup} — ' + ' | '.join(failed)
-        )
-
-    # ลบตารางชั่วคราวถ้าค้างจาก migration ที่ล้มเหลวก่อนหน้า
-    con.execute("DROP TABLE IF EXISTS attachments_v2")
-
-    # สร้างตารางใหม่โดยไม่มี file_data
-    con.execute("""
-        CREATE TABLE attachments_v2 (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            record_id   INTEGER NOT NULL,
-            book_no     TEXT    NOT NULL,
-            filename    TEXT    NOT NULL,
-            stored_name TEXT    NOT NULL DEFAULT '',
-            mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
-            file_size   INTEGER,
-            uploaded_at TEXT,
-            FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
-        )
-    """)
-
-    # INSERT เฉพาะคอลัมน์ที่มีอยู่จริงใน schema เก่า
-    src_map = {
-        'id':          'id',
-        'record_id':   'record_id',
-        'book_no':     'CAST(book_no AS TEXT)',
-        'filename':    'filename',
-        'stored_name': "COALESCE(stored_name, '')",
-        'mime_type':   "'application/pdf'" if 'mime_type'   not in att_cols else 'mime_type',
-        'file_size':   'file_size'          if 'file_size'  in att_cols     else 'NULL',
-        'uploaded_at': 'NULL'               if 'uploaded_at' not in att_cols else 'uploaded_at',
-    }
-    dst_cols = ', '.join(src_map.keys())
-    src_expr = ', '.join(src_map.values())
-    con.execute(f"INSERT INTO attachments_v2 ({dst_cols}) SELECT {src_expr} FROM attachments")
-    con.execute("DROP TABLE attachments")
-    con.execute("ALTER TABLE attachments_v2 RENAME TO attachments")
-    con.commit()
+            _safe_remove(p)
+        raise
 
 
 def _dedupe_attachment_slots(con) -> list:

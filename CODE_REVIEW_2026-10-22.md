@@ -563,7 +563,7 @@ print(f'สำรองไว้ที่ {DB}.bak')
 > **อัปเดต 22/10/2026** แก้แล้ว 2 ข้อจาก 12 ข้อ (ข้อ 19, 24)
 > ข้อ 24 (pin เวอร์ชัน + ชุด pytest) ทำก่อนเพราะมันกันข้อที่เหลือไม่ให้ย้อนกลับมาเงียบ ๆ
 
-### 14. Content-Type ของ CSV export ผิดรูปแบบ มี `charset` ซ้อนสองตัว
+### 14. Content-Type ของ CSV export ผิดรูปแบบ มี `charset` ซ้อนสองตัว — **แก้แล้ว 26/10/2026 (วิธีแก้ที่เสนอไว้ใช้ไม่ได้ ดูท้ายไฟล์)**
 
 - **Severity:** Minor (เป็นประเด็นใหม่ ยืนยันด้วยการรันจริง)
 - **Location:** `app.py:923`
@@ -576,7 +576,7 @@ print(f'สำรองไว้ที่ {DB}.bak')
   ไม่ต้องพึ่ง charset ใน header เลย
 - **Suggested fix:** `mimetype='text/csv; charset=utf-8'`
 
-### 15. CSV formula injection ทั้ง export ฝั่ง server และ client
+### 15. CSV formula injection ทั้ง export ฝั่ง server และ client — **แก้แล้ว 26/10/2026**
 
 - **Severity:** Minor
 - **Location:** `app.py:918-923`, `templates/index.html:1486`
@@ -585,7 +585,7 @@ print(f'สำรองไว้ที่ {DB}.bak')
 - **Why it matters:** เปิดไฟล์ export ใน Excel แล้วสูตรทำงานทันที ใช้ดึงข้อมูลออกหรือหลอกให้คลิกลิงก์ได้
 - **Suggested fix:** นำหน้าค่าเสี่ยงด้วย single quote ทั้งสองฝั่ง เช่น `if v and v[0] in '=+-@': v = "'" + v`
 
-### 16. ตาราง `attachments` ไม่มี index บน `record_id`
+### 16. ตาราง `attachments` ไม่มี index บน `record_id` — **แก้แล้ว 26/10/2026 (รวมกับข้อ 18 เป็น index ตัวเดียว)**
 
 - **Severity:** Minor
 - **Location:** `app.py:289-300`
@@ -594,7 +594,7 @@ print(f'สำรองไว้ที่ {DB}.bak')
 - **Suggested fix:** เพิ่มใน `init_db()` ว่า
   `con.execute('CREATE INDEX IF NOT EXISTS idx_att_record ON attachments(record_id)')`
 
-### 17. badge บอกโหมดแสดงจุดเขียวทั้งสองโหมด และ class `.dy` ไม่มีใน CSS
+### 17. badge บอกโหมดแสดงจุดเขียวทั้งสองโหมด และ class `.dy` ไม่มีใน CSS — **แก้แล้ว 26/10/2026 (ส่วน `.dy` เป็นข้อมูลผิด ดูท้ายไฟล์)**
 
 - **Severity:** Minor (เป็นประเด็นใหม่ ไม่อยู่ในรีวิวเดิม)
 - **Location:** `templates/index.html:100` (`class="dot dy"`), `:591` และ `:593` (ทั้งคู่ใช้ `dot dg`), CSS ที่ `:23-24`
@@ -607,7 +607,7 @@ print(f'สำรองไว้ที่ {DB}.bak')
 - **Suggested fix:** เพิ่ม `.dy{background:#f59e0b}` และ `.dr{background:#dc3545}` ใน CSS
   แล้วเปลี่ยนบรรทัด 593 เป็น `'<span class="dot dr"></span>LocalStorage (Offline)'`
 
-### 18. ไม่มี UNIQUE constraint บน `(record_id, book_no)`
+### 18. ไม่มี UNIQUE constraint บน `(record_id, book_no)` — **แก้แล้ว 26/10/2026 (เหตุผลเรื่อง race ผิด ดูท้ายไฟล์)**
 
 - **Severity:** Minor (เป็นประเด็นใหม่ ไม่อยู่ในรีวิวเดิม)
 - **Location:** `app.py:289-300` (CREATE TABLE), `:733-738` (DELETE แล้ว INSERT)
@@ -799,6 +799,31 @@ def test_upload_to_missing_record_404(client):  # กันข้อ 19
 - **ข้อ 9 ขอบเขตกว้างกว่า 8 จุดที่ระบุ** `@app.errorhandler(400/404/500)` ก็ต่อ `str(e)` แบบเดียวกัน
   ของพวกนี้ไม่ได้เปิดเผยรายละเอียดภายใน (เป็น boilerplate ของ Werkzeug) แต่ยาวเกิน 80 ตัวอักษร
   จึงเปิด `alert()` ด้วยข้อความอังกฤษที่ผู้ใช้ทำอะไรต่อไม่ได้ แก้รวมไปในรอบนี้แล้ว
+
+---
+
+## ข้อแก้ไขจากรีวิวนี้ (26/10/2026) — ข้อ 14 ถึง 18
+
+ทั้งห้าข้อแก้แล้ว รายละเอียดอยู่ใน [spec.md](spec.md) ส่วนนี้บันทึกเฉพาะจุดที่
+**การตรวจจริงไม่ตรงกับที่รีวิวเขียนไว้**
+
+- **ข้อ 14 วิธีแก้ที่เสนอไว้ใช้ไม่ได้** รีวิวเสนอ `mimetype='text/csv; charset=utf-8'`
+  วัดบน flask 3.1.3 / werkzeug 3.1.9 แล้วได้ `text/csv; charset=utf-8; charset=utf-8`
+  ยังซ้อนสองตัวเหมือนเดิม เพราะ Werkzeug เติม charset ต่อท้ายไม่ว่า mimetype จะมีอยู่แล้วหรือไม่
+  ที่ถูกคือ `mimetype='text/csv'` เฉย ๆ หรือกำหนด `content_type=` ไปทั้งก้อน
+- **ข้อ 17 ครึ่งหนึ่งเป็นข้อมูลผิด** รีวิวบอกว่า CSS นิยามแค่ `.dot` กับ `.dg` ส่วน `.dy` ไม่มี
+  จุดนั้นจึงเรนเดอร์เป็นวงกลม 9px โปร่งใส ตรวจแล้ว `.dy` อยู่ในไฟล์ตั้งแต่ commit แรก
+  (`git log -S` ชี้ไป `14d4f69`) และ browser รายงาน computed background เป็น `rgb(245, 158, 11)`
+  ส่วนที่จริงคือ `.dr` ไม่มี และ branch โหมด offline เลือก class ผิดเป็น `dot dg`
+- **ข้อ 18 เหตุผลเรื่อง race ผิด** รีวิวบอกว่า upload ช่องเดียวกันพร้อมกันอาจ INSERT สำเร็จทั้งคู่
+  ได้สองแถวในช่องเดียว ยิงพร้อมกัน 2, 4 และ 8 เส้นแล้วไม่เคยเกิดสักครั้ง เพราะ sqlite
+  serialise ตัวเขียนอยู่แล้ว ผลเสียที่เกิดจริงคือ **ไฟล์กำพร้า** ซึ่งตรงกับที่รีวิวกังวลไว้ตอนท้าย
+  แต่คนละกลไก: แต่ละ request อ่าน `stored_name` เก่าใน snapshot ของตัวเองก่อนได้ write lock
+  หลาย request จึงเห็นค่าเดียวกัน แล้วไฟล์ที่ผู้แพ้แทนที่ไปไม่มีใครลบ
+  (อัปพร้อมกัน 4 ครั้งเหลือขยะ 2 ไฟล์ 8 ครั้งเหลือ 5 ไฟล์)
+- **ข้อ 18 ส่วนที่รีวิวประเมินต่ำไป** `book_no` ไม่ได้แค่ "สร้างช่องได้ไม่จำกัด"
+  ยิงตรงด้วย `book_no='../../etc/passwd'` ก็ได้ 201 (ชื่อนี้ไม่เคยถูกใช้ประกอบ path บนดิสก์
+  จึงไม่ใช่ช่องโหว่ path traversal แต่เป็นแถวที่ UI แสดงไม่ได้และผู้ใช้ลบไม่ได้)
 
 ---
 

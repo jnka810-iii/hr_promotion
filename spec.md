@@ -10,6 +10,45 @@
 
 ## งานล่าสุด
 
+- **แก้ Minor ข้อ 14-18 (26/10/2026)** — CSV export, index/constraint ของไฟล์แนบ และ badge บอกโหมด
+  - **ข้อ 14** `mimetype='text/csv; charset=utf-8-sig'` ใส่ parameter มาใน mimetype
+    Werkzeug จึงเติม charset ของตัวเองต่อท้ายอีกชั้น ได้ `text/csv; charset=utf-8-sig; charset=utf-8`
+    **วิธีแก้ที่รีวิวเสนอก็ผิด** วัดบน flask 3.1.3 / werkzeug 3.1.9 แล้ว
+    `mimetype='text/csv; charset=utf-8'` ยังได้ charset ซ้อนสองตัวเหมือนเดิม
+    ที่ถูกคือไม่ใส่ parameter ใน mimetype เลย ปล่อยให้ Werkzeug เติมเอง → `text/csv; charset=utf-8`
+    BOM ซึ่งเป็นกลไกจริงที่ทำให้ Excel อ่านไทยได้ ยังอยู่ครบและมี test คุมไว้
+  - **ข้อ 15** เพิ่ม `csv_cell()` ([app.py](app.py)) และ `csvCell()` ([templates/index.html](templates/index.html))
+    นำหน้าค่าที่ขึ้นต้นด้วย `=` `+` `-` `@` tab หรือ CR ด้วย single quote
+    ด่านอยู่ตรงจุด export ไม่ใช่ตอนรับ input เพราะ export อ่านจาก DB ตรง ๆ และ `fix_db.py`
+    แก้ DB ด้วยมือได้ สองฝั่งอ้างถึงกันใน comment เพราะถ้าแก้ข้างเดียวไฟล์จากสองปุ่มจะไม่เหมือนกัน
+  - **ข้อ 16 + 18 ใช้ index ตัวเดียวกัน** `CREATE UNIQUE INDEX idx_att_record_book ON attachments(record_id, book_no)`
+    บังคับกฎ 1 ช่อง 1 ไฟล์ที่ schema และคอลัมน์ซ้ายสุดก็รับงาน `WHERE record_id=?` กับ CASCADE
+    ที่ข้อ 16 ขอ index แยกไว้ด้วย query plan เปลี่ยนจาก `SCAN attachments` เป็น
+    `SEARCH attachments USING COVERING INDEX`
+    sqlite ทำ `ALTER TABLE ADD CONSTRAINT` ไม่ได้ และ CLAUDE.md ห้าม DROP แล้วสร้างใหม่
+    นอกงาน migration เต็มรูปแบบ จึงใช้ index แทน UNIQUE ระดับตารางที่รีวิวเสนอ
+  - `_dedupe_attachment_slots()` รวบแถวซ้ำให้เหลือ id สูงสุดของแต่ละช่องก่อนสร้าง index
+    ถ้าไม่ทำ DB เก่าที่มีแถวซ้ำจะทำให้ `CREATE UNIQUE INDEX` โยน exception กลาง `init_db()`
+    = แอปเปิดไม่ขึ้นทั้งตัว ไม่ใช่แค่ฟีเจอร์เดียวพัง ไฟล์ของแถวที่ทิ้งลบหลัง commit ตาม invariant เดิม
+    (ตรวจ `hr_promotion.db` ตัวจริงแบบ read-only แล้ว: 4 record, 2 ไฟล์แนบ, ไม่มีคู่ซ้ำ
+    migration จึงไม่ลบอะไรเลยบนเครื่องนี้ และ book_no ที่มีอยู่ `['1','ann']` อยู่ใน whitelist ครบ)
+  - **ข้อ 18** `book_no` ต้องอยู่ใน `BOOK_SLOTS = {'1','2','3','ann'}` ไม่อย่างนั้นตอบ 400
+    ก่อนแตะดิสก์ ของเดิมรับอะไรก็ได้ ยิงตรงด้วย `book_no='../../etc/passwd'` ก็ได้ 201
+  - **ผลกระทบจริงของ race ไม่ตรงกับที่รีวิวอ้าง** รีวิวบอกว่า upload พร้อมกันจะได้สองแถวในช่องเดียว
+    ทดสอบจริงแล้วไม่เคยเกิด เพราะ sqlite serialise ตัวเขียนอยู่แล้ว ของจริงที่เกิดคือ **ไฟล์กำพร้า**
+    แต่ละ request อ่าน `stored_name` เก่าใน snapshot ของตัวเองก่อนได้ write lock หลายตัวจึงเห็นค่าเดียวกัน
+    แล้วไฟล์ที่ผู้แพ้แทนที่ไปไม่มีใครลบ วัดได้: อัปพร้อมกัน 4 ครั้งเหลือขยะ 2 ไฟล์ 8 ครั้งเหลือ 5 ไฟล์
+    แก้โดยอ่านชื่อไฟล์เก่าจาก `DELETE ... RETURNING stored_name` ซึ่งทำงานใต้ write lock
+    หลังแก้ทั้ง 2/4/8 ครั้งเหลือ 0 ไฟล์กำพร้า
+  - **ข้อ 17** badge โหมด LocalStorage ใช้จุดเขียวเหมือนโหมดปกติ เปลี่ยนเป็นจุดแดงและเพิ่ม `.dr` ใน CSS
+    **ครึ่งหนึ่งของข้อนี้ผิด** รีวิวบอกว่า `.dy` ไม่มีใน CSS และเรนเดอร์เป็นวงกลมโปร่งใส
+    แต่ `.dy` อยู่ในไฟล์มาตั้งแต่ commit แรก และ browser รายงาน computed background
+    เป็น `rgb(245, 158, 11)` จริง ไม่มีอะไรโปร่งใสและไม่ต้องเพิ่มอะไรให้มัน
+  - ยืนยันข้อ 17 ด้วย browser จริงกับแอปสองตัว ตัวหนึ่งปกติ อีกตัว drop ตาราง records ให้ probe ล้ม:
+    offline ได้ `rgb(220, 53, 69)` ส่วนปกติยังเป็น `rgb(34, 197, 94)`
+  - test เพิ่มเป็น 83 ตัว (จาก 59) รวม test ที่ยิง upload พร้อมกัน 6 เส้นแล้วเช็ก invariant
+    "ไฟล์บนดิสก์ = แถวใน DB" (รันซ้ำ 5 รอบไม่ flaky)
+
 - **แก้ Important ข้อ 9 และ ข้อ 11 (26/10/2026)** — ไม่ส่ง `str(e)` ให้ client และปิด connection ทุกเส้นทาง
   - ข้อ 9: ทุก route เคยต่อ `str(e)` เข้าข้อความ error วัดจริงผ่าน HTTP ก่อนแก้ — upload ที่เขียนไฟล์ไม่ได้
     ตอบ `ไม่สามารถบันทึกไฟล์ได้: [WinError 183] ... 'C:\\Users\\...\\uploads'` ยาว 161 ตัวอักษร

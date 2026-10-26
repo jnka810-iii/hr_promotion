@@ -40,6 +40,11 @@ app.config['MAX_CONTENT_LENGTH'] = 110 * 1024 * 1024
 # จึงต้องมีสำเนาฝั่ง server เสมอ
 MAX_PDF_SIZE = 100 * 1024 * 1024
 
+# ช่องไฟล์แนบที่ UI มีจริง: เล่ม 1-3 และประกาศ ('ann')
+# `book_no` มาจาก client ตรง ๆ ถ้าไม่จำกัดไว้ client จะสร้างช่องชื่ออะไรก็ได้ไม่จำกัดจำนวน
+# ซึ่งกลายเป็นไฟล์ที่หน้าจอไม่แสดงและผู้ใช้ลบออกไม่ได้ ได้แต่กินพื้นที่ไปเรื่อย ๆ
+BOOK_SLOTS = frozenset({'1', '2', '3', 'ann'})
+
 # รายละเอียด exception ทั้งหมดไปอยู่ที่นี่ แทนที่จะส่งกลับให้ client (ดู fail())
 # handler ถูกต่อใน _setup_logging() ซึ่ง main() เรียก — import เปล่าจึงไม่สร้างไฟล์
 log = logging.getLogger('hr_promotion')
@@ -339,6 +344,37 @@ def _migrate_blobs_to_files(con):
     con.commit()
 
 
+def _dedupe_attachment_slots(con) -> list:
+    """
+    รวบแถว attachments ที่ซ้ำคู่ (record_id, book_no) ให้เหลือแถวใหม่สุดแถวเดียว
+
+    ต้องทำก่อนสร้าง UNIQUE index เสมอ: DB ที่ใช้งานมาก่อนหน้านี้ไม่มีอะไรกันแถวซ้ำ
+    ถ้าเจอซ้ำแล้วไปสร้าง index ตรง ๆ `CREATE UNIQUE INDEX` จะโยน IntegrityError
+    กลางทาง `init_db()` ซึ่งแปลว่าแอปเปิดไม่ขึ้นเลย ไม่ใช่แค่ฟีเจอร์เดียวพัง
+
+    เลือกแถว id มากสุดของแต่ละช่องเป็นผู้รอด เพราะ id เป็น AUTOINCREMENT
+    แถวที่ id สูงกว่าคือไฟล์ที่ผู้ใช้อัปโหลดทีหลัง ซึ่งเป็นตัวที่ UI แสดงอยู่แล้ว
+    (`loadAttachments` วนทับ uploadedMeta ตามลำดับที่ได้มา แถวท้ายจึงชนะ)
+
+    คืน path ของไฟล์ที่ไม่มีแถวชี้ถึงแล้ว ให้ผู้เรียกลบ "หลัง commit" ตาม invariant
+    ของ file storage — ลบก่อน commit แล้ว rollback จะได้แถวที่ชี้ไฟล์หาย
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่อยู่ใน transaction ของ init_db
+
+    Returns:
+        list[str]: path เต็มของไฟล์ที่ต้องลบหลัง commit
+    """
+    doomed = con.execute(
+        'SELECT stored_name FROM attachments WHERE id NOT IN '
+        '(SELECT MAX(id) FROM attachments GROUP BY record_id, book_no)'
+    ).fetchall()
+    if not doomed:
+        return []
+    con.execute('DELETE FROM attachments WHERE id NOT IN '
+                '(SELECT MAX(id) FROM attachments GROUP BY record_id, book_no)')
+    return [_stored_path(r[0]) for r in doomed if r[0]]
+
 def init_db():
     """
     เตรียมฐานข้อมูลตอนแอปเริ่มทำงาน — สร้างตาราง + migrate schema แบบ additive
@@ -452,7 +488,15 @@ def init_db():
             if col not in existing:
                 con.execute(f'ALTER TABLE records ADD COLUMN {col} {ctype}')
 
+        orphaned = _dedupe_attachment_slots(con)
+        con.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_att_record_book '
+                    'ON attachments(record_id, book_no)')
+
         con.commit()
+
+    # ลบไฟล์หลัง commit เสมอ ตาม invariant เดียวกับ delete_record
+    for path in orphaned:
+        _safe_remove(path)
 
 
 # ────────────────────────────────────────────────
@@ -796,8 +840,9 @@ def upload_attachment(rid):
     2. เขียนไฟล์ใหม่ลงดิสก์ด้วยชื่อ UUID ก่อนแตะ DB
        (ใช้ UUID เพื่อกันชื่อชนกันและตัดปัญหาชื่อไฟล์ภาษาไทย/อักขระพิเศษบนดิสก์)
     3. จำ path ของไฟล์เก่าในช่อง (record_id, book_no) เดียวกันไว้ แต่ยังไม่ลบ
-    4. DELETE row เก่า + INSERT row ใหม่ = พฤติกรรม "replace" — บังคับให้
-       1 record มีไฟล์ได้ช่องละ 1 ไฟล์ (เล่ม 1-3 และประกาศ 'ann')
+    4. DELETE row เก่า (อ่านชื่อไฟล์เก่าจาก RETURNING ของ DELETE เอง) + INSERT row ใหม่
+       = พฤติกรรม "replace" ส่วนกฎ 1 ช่อง 1 ไฟล์ บังคับที่ schema แล้วด้วย
+       UNIQUE index idx_att_record_book ไม่ได้อาศัยลำดับคำสั่งตรงนี้อย่างเดียว
     5. commit ผ่านแล้วจึงลบไฟล์เก่า — ลำดับนี้สำคัญ ถ้าลบก่อน commit แล้วเกิด
        exception ระหว่างทาง rollback จะคืน row เก่าที่ชี้ไปยังไฟล์ที่หายไปแล้ว
     6. ถ้า DB ล้มเหลว: rollback แล้วลบไฟล์ที่เพิ่งเขียนทิ้ง (ขั้นตอน compensate)
@@ -813,6 +858,7 @@ def upload_attachment(rid):
         Response (JSON):
         - 201 {'id', 'ok', 'filename', 'size'} เมื่อสำเร็จ
         - 400 ไม่มีไฟล์ / ไฟล์ว่าง / ไม่ใช่ PDF / base64 เสียหาย / body ผิดรูปแบบ
+              / book_no ไม่ใช่ช่องที่ UI มีจริง (ดู BOOK_SLOTS)
         - 404 ไม่พบ record id นี้ (เช็กก่อนเขียนไฟล์ และดักกรณี race ที่ FK constraint ด้วย)
         - 413 ไฟล์เกิน MAX_PDF_SIZE (100 MB)
         - 500 เขียนไฟล์หรือ DB ล้มเหลว (พร้อม rollback ทั้งไฟล์และ DB)
@@ -841,6 +887,8 @@ def upload_attachment(rid):
     # ตรวจเนื้อหาไฟล์ก่อนแตะดิสก์ — ของพวกนี้เช็กฝั่ง client อยู่แล้วแต่ยกเลิกได้ด้วยการยิง API ตรง
     # และถ้าหลุดเข้ามาได้ ไฟล์จะถูก serve กลับด้วย Content-Type: application/pdf ผ่าน /preview
     # (mime ด้านล่าง hardcode ไว้ ความถูกต้องของมันจึงขึ้นอยู่กับด่านนี้ทั้งหมด)
+    if book_no not in BOOK_SLOTS:
+        return jsonify({'error': 'ช่องไฟล์แนบไม่ถูกต้อง รองรับเฉพาะเล่ม 1-3 และประกาศเท่านั้น'}), 400
     if not file_bytes:
         return jsonify({'error': 'ไฟล์ว่าง ไม่มีข้อมูลให้บันทึก'}), 400
     if len(file_bytes) > MAX_PDF_SIZE:
@@ -876,15 +924,18 @@ def upload_attachment(rid):
     con  = get_db()
     old_path = None
     try:
-        # จำ path ของไฟล์เก่าไว้ก่อน แต่ยังไม่ลบ — ต้องรอให้ commit ผ่านก่อน (ดูด้านล่าง)
+        # อ่านชื่อไฟล์เก่าจากตัว DELETE เอง ไม่ใช่ SELECT แยกก่อนหน้า:
+        # SELECT แยกจะอ่านใน snapshot ของ request ตัวเองซึ่งเกิด "ก่อน" ได้ write lock
+        # ถ้ามีหลาย request อัปช่องเดียวกันพร้อมกัน ทุกตัวจะเห็นชื่อไฟล์เก่าตัวเดียวกัน
+        # แล้วไฟล์ที่ผู้แพ้แทนที่ไปจะไม่มีใครลบ กลายเป็นไฟล์กำพร้าเงียบ ๆ
+        # DELETE ยึด write lock ก่อนทำงาน ค่าที่ RETURNING คืนจึงเป็นแถวที่ถูกลบไปจริง ๆ
+        # (ยังไม่ลบไฟล์ตรงนี้ ต้องรอ commit ผ่านก่อนเหมือนเดิม)
         old = con.execute(
-            'SELECT stored_name FROM attachments WHERE record_id=? AND book_no=?',
+            'DELETE FROM attachments WHERE record_id=? AND book_no=? RETURNING stored_name',
             [rid, book_no]
         ).fetchone()
         if old and old['stored_name']:
             old_path = _stored_path(old['stored_name'])
-
-        con.execute('DELETE FROM attachments WHERE record_id=? AND book_no=?', [rid, book_no])
         cur = con.execute(
             'INSERT INTO attachments '
             '(record_id, book_no, filename, stored_name, mime_type, file_size, uploaded_at) '

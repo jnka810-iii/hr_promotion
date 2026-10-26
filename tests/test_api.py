@@ -15,7 +15,9 @@
 import base64
 import csv
 import io
+import json
 import os
+import re
 import socket
 import sqlite3
 import threading
@@ -25,6 +27,7 @@ import types
 import pytest
 
 import app as hr
+from conftest import VALID_RECORD
 
 
 # ────────────────────────────────────────────────
@@ -233,8 +236,7 @@ def test_required_fields_rejected_with_thai_labels(client):
 
 
 def test_update_missing_record_returns_404(client):
-    r = client.put('/api/records/9999', json={
-        'p1_fname': 'ก', 'p1_lname': 'ข', 'p2_pos_current': 'ค', 'p2_empid': '1'})
+    r = client.put('/api/records/9999', json=VALID_RECORD)
     assert r.status_code == 404
 
 
@@ -359,11 +361,9 @@ MAX_CLIENT_MESSAGE = 80
 # (ชื่อเคส, คำสั่งที่จะให้ล้ม, ฟังก์ชันยิง request)
 WRITE_FAILURES = [
     ('add_record',        'INSERT INTO RECORDS',
-     lambda c, rid: c.post('/api/records', json={'p1_fname': 'ก', 'p1_lname': 'ข',
-                                                 'p2_pos_current': 'ค', 'p2_empid': '1'})),
+     lambda c, rid: c.post('/api/records', json=VALID_RECORD)),
     ('update_record',     'UPDATE RECORDS',
-     lambda c, rid: c.put('/api/records/%d' % rid, json={'p1_fname': 'ก', 'p1_lname': 'ข',
-                                                         'p2_pos_current': 'ค', 'p2_empid': '1'})),
+     lambda c, rid: c.put('/api/records/%d' % rid, json=VALID_RECORD)),
     ('delete_record',     'DELETE FROM RECORDS',
      lambda c, rid: c.delete('/api/records/%d' % rid)),
     ('delete_all',        'DELETE FROM RECORDS',
@@ -432,8 +432,7 @@ def test_item9_detail_still_reaches_the_server_log(client, make_record, fail_sql
     rid = make_record()
     fail_sql('UPDATE RECORDS')
     with caplog.at_level('ERROR'):
-        client.put('/api/records/%d' % rid, json={'p1_fname': 'ก', 'p1_lname': 'ข',
-                                                  'p2_pos_current': 'ค', 'p2_empid': '1'})
+        client.put('/api/records/%d' % rid, json=VALID_RECORD)
     assert 'simulated DB failure' in caplog.text
     assert 'Traceback' in caplog.text
 
@@ -738,10 +737,8 @@ def test_item20_delete_is_idempotent_but_update_is_not(client):
     ซึ่งเป็นจริงอยู่แล้วเมื่อไม่พบ id จึงสำเร็จ แต่ PUT บอกว่า "ขอให้ของชิ้นนี้
     มีค่าใหม่" ซึ่งทำไม่ได้เลยถ้าไม่มีแถวให้ถือค่า จึงต้องเป็น 404
     """
-    payload = {'p1_fname': 'ก', 'p1_lname': 'ข',
-               'p2_pos_current': 'ค', 'p2_empid': 'ง'}
     assert client.delete('/api/records/9999').status_code == 200
-    assert client.put('/api/records/9999', json=payload).status_code == 404
+    assert client.put('/api/records/9999', json=VALID_RECORD).status_code == 404
 
 
 def test_item20_every_delete_route_answers_the_same_way(client):
@@ -798,3 +795,87 @@ def test_item22_window_opens_even_when_the_server_never_answers(monkeypatch):
     hr.main()
 
     assert calls == ['create_window', 'start']
+
+
+# ────────────────────────────────────────────────
+# ข้อ 25 — กฎฟิลด์บังคับต้องมีชุดเดียว
+# ────────────────────────────────────────────────
+
+TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'templates', 'index.html')
+
+
+def _template_source():
+    with io.open(TEMPLATE, encoding='utf-8') as f:
+        return f.read()
+
+
+def _rendered_required_list(client):
+    """ดึงรายการฟิลด์บังคับที่ server ฝังมากับหน้าเว็บ"""
+    html = client.get('/').get_data(as_text=True)
+    m = re.search(r'<script type="application/json" id="required-fields">(.*?)</script>',
+                  html, re.S)
+    assert m, 'หน้าเว็บไม่ได้ฝังรายการฟิลด์บังคับมาด้วย client จึงไม่มีทางรู้กฎเดียวกับ server'
+    return json.loads(m.group(1))
+
+
+def test_item25_payload_matches_the_server_list():
+    """
+    VALID_RECORD ใน conftest เขียนคีย์ไว้ตรง ๆ ไม่ได้ derive มาจาก REQUIRED_FIELDS
+    ถ้าสองฝั่งหลุดจากกัน test ตัวนี้จะเป็นตัวที่บอก แทนที่จะให้ fixture พังเป็นสิบจุด
+    """
+    assert set(hr.REQUIRED_FIELDS) == set(VALID_RECORD)
+
+
+def test_item25_server_enforces_what_the_form_asks_for(client):
+    """
+    ฟอร์มขึ้นดอกจัน 13 ช่องแล้วไม่ยอมให้บันทึกถ้าไม่ครบ นั่นคือกฎที่ผู้ใช้เจอจริง
+    ส่วน server เคยบังคับแค่ 4 ช่อง กฎเดียวกันจึงถูกเขียนไว้สองที่ด้วยค่าไม่เท่ากัน
+    """
+    assert _rendered_required_list(client) == hr.REQUIRED_FIELDS
+
+
+def test_item25_form_markup_has_no_second_copy_of_the_rule():
+    """
+    ดอกจันกับ attribute `required` ใน HTML เป็นสำเนาที่สามของกฎเดียวกัน
+    ต้องมาจากรายการฝั่ง server ตอน runtime ไม่ใช่พิมพ์ค้างไว้ใน markup
+    """
+    src = _template_source()
+    assert 'form-label required' not in src
+    assert re.search(r'<(input|select|textarea)[^>]*required', src) is None
+
+
+def test_item25_every_required_field_has_an_input_in_the_form(client):
+    """
+    ฟิลด์ที่ server บังคับแต่ฟอร์มไม่มีช่องให้กรอก = ผู้ใช้บันทึกไม่ได้และแก้เองไม่ได้
+    """
+    src = _template_source()
+    for col in _rendered_required_list(client):
+        assert 'id="%s"' % col in src, col
+
+
+def test_item25_labels_are_unique():
+    """
+    `ตำแหน่งเลขที่` มีสองช่อง (ส่วนที่ 2 และส่วนที่ 3) ถ้าป้ายซ้ำกัน ข้อความ error
+    จะบอกชื่อเดียวกันสองครั้งโดยไม่มีทางรู้ว่าช่องไหน
+    """
+    labels = list(hr.REQUIRED_FIELDS.values())
+    assert len(set(labels)) == len(labels)
+
+
+def test_item25_post_with_only_the_old_four_fields_is_rejected(client):
+    r = client.post('/api/records', json={
+        'p1_fname': 'ก', 'p1_lname': 'ข', 'p2_pos_current': 'ค', 'p2_empid': '1'})
+    assert r.status_code == 422
+    assert 'คำนำหน้า' in r.get_json()['error']
+
+
+def test_item25_put_with_only_the_old_four_fields_is_rejected(client, make_record):
+    rid = make_record()
+    r = client.put('/api/records/%d' % rid, json={
+        'p1_fname': 'ก', 'p1_lname': 'ข', 'p2_pos_current': 'ค', 'p2_empid': '1'})
+    assert r.status_code == 422
+
+
+def test_item25_full_record_is_accepted(client):
+    assert client.post('/api/records', json=VALID_RECORD).status_code == 201

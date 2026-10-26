@@ -16,8 +16,11 @@ import base64
 import csv
 import io
 import os
+import socket
 import sqlite3
 import threading
+import time
+import types
 
 import pytest
 
@@ -711,3 +714,87 @@ def test_item18_concurrent_uploads_to_one_slot_leave_no_orphan_files(
     assert codes.count(201) == 6
     assert len(stored) == 1, 'ช่องเดียวต้องเหลือแถวเดียว'
     assert on_disk == stored, 'ไฟล์กำพร้า: %r' % sorted(on_disk - stored)
+
+
+# ────────────────────────────────────────────────
+# ข้อ 20 — DELETE เป็น idempotent, PUT ไม่ใช่
+# ────────────────────────────────────────────────
+
+def test_item20_delete_missing_record_reports_success(client):
+    r = client.delete('/api/records/9999')
+    assert r.status_code == 200
+    assert r.get_json() == {'ok': True}
+
+
+def test_item20_deleting_twice_reports_success_both_times(client, make_record):
+    rid = make_record()
+    assert client.delete('/api/records/%d' % rid).status_code == 200
+    assert client.delete('/api/records/%d' % rid).status_code == 200
+
+
+def test_item20_delete_is_idempotent_but_update_is_not(client):
+    """
+    ความต่างนี้จงใจ ไม่ใช่ลืมเช็ก: DELETE บอกว่า "ขอให้ของชิ้นนี้ไม่มีอยู่"
+    ซึ่งเป็นจริงอยู่แล้วเมื่อไม่พบ id จึงสำเร็จ แต่ PUT บอกว่า "ขอให้ของชิ้นนี้
+    มีค่าใหม่" ซึ่งทำไม่ได้เลยถ้าไม่มีแถวให้ถือค่า จึงต้องเป็น 404
+    """
+    payload = {'p1_fname': 'ก', 'p1_lname': 'ข',
+               'p2_pos_current': 'ค', 'p2_empid': 'ง'}
+    assert client.delete('/api/records/9999').status_code == 200
+    assert client.put('/api/records/9999', json=payload).status_code == 404
+
+
+def test_item20_every_delete_route_answers_the_same_way(client):
+    assert client.delete('/api/records/9999').status_code == 200
+    assert client.delete('/api/attachments/9999').status_code == 200
+
+
+# ────────────────────────────────────────────────
+# ข้อ 22 — รอให้ port เปิดจริง ไม่ใช่เดาเวลา
+# ────────────────────────────────────────────────
+
+def test_item22_returns_once_the_port_accepts():
+    with socket.socket() as srv:
+        srv.bind(('127.0.0.1', 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        t0 = time.perf_counter()
+        assert hr._wait_for_port(port, timeout=2.0) is True
+        assert time.perf_counter() - t0 < 0.5, 'port เปิดอยู่แล้วต้องไม่หน่วง'
+
+
+def test_item22_keeps_retrying_until_the_ceiling():
+    """
+    ยืนยันว่า "รอ" จริง ไม่ใช่ลองครั้งเดียวแล้วเลิก — เครื่องช้าหรือ antivirus
+    ที่สแกนอยู่คือเคสที่ข้อนี้ต้องกัน ซึ่งการลองครั้งเดียวแก้ไม่ได้
+    """
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+
+    t0 = time.perf_counter()
+    assert hr._wait_for_port(port, timeout=0.3) is False
+    elapsed = time.perf_counter() - t0
+    assert elapsed >= 0.3, 'เลิกเร็วเกินไป (%.3fs) แปลว่าไม่ได้วนรอ' % elapsed
+    assert elapsed < 2.0, 'วนเกิน timeout ที่สั่งไว้ (%.3fs)' % elapsed
+
+
+def test_item22_window_opens_even_when_the_server_never_answers(monkeypatch):
+    """
+    ผลเสียของการเปลี่ยนจาก sleep คงที่มาเป็นการรอ คือถ้ารอไม่มีเพดาน
+    หน้าต่างจะไม่เปิดเลย ซึ่งแย่กว่าเดิม — ต้องเปิดต่อแม้ server ไม่ตอบ
+    """
+    calls = []
+    monkeypatch.setattr(hr, 'HAS_WEBVIEW', True)
+    monkeypatch.setattr(hr, 'webview', types.SimpleNamespace(
+        create_window=lambda **kw: calls.append('create_window'),
+        start=lambda **kw: calls.append('start'),
+    ), raising=False)
+    monkeypatch.setattr(hr, 'run_flask', lambda: time.sleep(5))
+    monkeypatch.setattr(hr, '_setup_logging', lambda: None)
+    monkeypatch.setattr(hr, 'init_db', lambda: None)
+    monkeypatch.setattr(hr, '_wait_for_port', lambda *a, **kw: False)
+
+    hr.main()
+
+    assert calls == ['create_window', 'start']

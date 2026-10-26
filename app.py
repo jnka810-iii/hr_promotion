@@ -977,11 +977,9 @@ def delete_attachment(att_id):
 # เพราะ frontend เรียกผ่าน fetch() และคาดหวัง response.json() เสมอ
 # (ถ้าปล่อยเป็น HTML ฝั่ง JS จะ parse พังและผู้ใช้เห็น error ที่อ่านไม่รู้เรื่อง)
 
-# ทั้งสามตัวนี้เคยต่อ str(e) เข้าไปเหมือน route ฝั่งเขียน (ข้อ 9) ซึ่งได้ข้อความ
-# boilerplate ภาษาอังกฤษของ Werkzeug ยาวเกิน 80 ตัวอักษร → toastError เปิด alert()
-# ใส่คำอธิบายที่ผู้ใช้ทำอะไรต่อได้ แทนข้อความที่อ่านแล้วไม่ได้อะไร
-# traceback ของ exception ที่ไม่มีใครจับ Flask log ให้เองทาง app.logger
-# ซึ่ง _setup_logging() ต่อ handler ตัวเดียวกันไว้แล้ว จึงไม่ต้อง log ซ้ำที่นี่
+# ไม่ใช้ str(e) เหมือนข้อ 9 — ของ Werkzeug เป็น boilerplate อังกฤษยาวเกิน 80 ตัวอักษร
+# ซึ่ง toastError เปิด alert() ให้ และไม่ได้บอกผู้ใช้ว่าต้องทำอะไรต่อ
+# ไม่ต้อง log ซ้ำที่นี่: exception ที่ไม่มีใครจับ Flask log ให้เองทาง app.logger
 
 @app.errorhandler(400)
 def bad_request(e):

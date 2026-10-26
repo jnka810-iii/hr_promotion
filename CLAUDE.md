@@ -13,7 +13,7 @@ python app.py        # pywebview window (or browser fallback on http://127.0.0.1
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest     # 83 tests, ~1.7s
+python -m pytest     # 90 tests, ~2.7s
 ```
 
 Tests monkeypatch `DB_PATH` + `UPLOAD_FOLDER` to pytest's `tmp_path` — they must never touch

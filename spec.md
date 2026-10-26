@@ -2,13 +2,40 @@
 
 ระบบบันทึกข้อมูลบุคคลและประเมินผลงานเพื่อเลื่อนระดับตำแหน่ง (Flask + SQLite3 + pywebview → .exe)
 
-## สถานะปัจจุบัน (11/07/2026)
+## สถานะปัจจุบัน (26/10/2026)
 
 - ระบบทำงานครบ: บันทึก/แก้ไข/ลบ record, อัปโหลด PDF (เล่ม 1-3 + ประกาศ), dashboard, export CSV/JSON
 - ไฟล์แนบเก็บแบบ file-based ใน `static/uploads/` (migrate จาก BLOB แล้ว)
 - Frontend มีโหมด offline fallback ผ่าน LocalStorage
 
 ## งานล่าสุด
+
+- **แก้ Important ข้อ 9 และ ข้อ 11 (26/10/2026)** — ไม่ส่ง `str(e)` ให้ client และปิด connection ทุกเส้นทาง
+  - ข้อ 9: ทุก route เคยต่อ `str(e)` เข้าข้อความ error วัดจริงผ่าน HTTP ก่อนแก้ — upload ที่เขียนไฟล์ไม่ได้
+    ตอบ `ไม่สามารถบันทึกไฟล์ได้: [WinError 183] ... 'C:\\Users\\...\\uploads'` ยาว 161 ตัวอักษร
+    ซึ่งเกินเพดาน 80 ตัวอักษรของ `toastError` → เปิด `alert()` โชว์ path ในเครื่องผู้ใช้
+    และ DB ล้มตอบ `DB error: no such table: records` บอกชื่อตารางให้
+  - รวมการตัดสินใจว่า "client เห็นอะไรได้" ไว้ที่ `fail(context, message, status)` ที่เดียว ([app.py](app.py):77)
+    status code ของแต่ละ route ยังเดิม เพราะ 422 (integrity ใน `add_record`) และ 404
+    (record หายระหว่าง upload) เป็นสัญญากับ frontend ไม่ใช่เรื่องบังเอิญ ข้อความไทยทุกตัวสั้นกว่า 80 ตัวอักษร
+  - `@app.errorhandler` ทั้งสามตัวมีอาการเดียวกันจึงแก้ด้วย (แก้ที่ pattern ไม่ใช่แค่ 8 จุดที่รีวิวระบุ)
+    ของเดิมคือ boilerplate อังกฤษของ Werkzeug ยาวพอที่จะเปิด `alert()` เหมือนกัน
+  - `_setup_logging()` เขียน `BASE_DIR/hr_promotion.log` หมุนที่ 1 MB เก็บ 3 รุ่น เรียกจาก `main()`
+    เท่านั้นไม่ใช่ตอน import (ไม่อย่างนั้น test จะทิ้งไฟล์ log ไว้ในโปรเจกต์) ต่อ handler เข้าทั้ง
+    `log` และ `app.logger` ยืนยันแล้วว่า exception ที่จับได้และที่ไม่มีใครจับ ลง log ครบพร้อม traceback
+    ขณะที่ client เห็นแค่ข้อความไทย — ถ้าไม่ทำส่วนนี้ การแก้ข้อ 9 จะเท่ากับลบช่องทาง debug ช่องเดียวที่มี
+  - ข้อ 11: route ฝั่งอ่าน 7 ตัว + `init_db()` เรียก `con.close()` เป็นบรรทัดตรง ๆ หลัง `execute()`
+    เปลี่ยนเป็น `with closing(get_db()) as con:` ทั้งหมด (idiom ที่ `upload_attachment` ใช้อยู่แล้ว)
+    route ฝั่งเขียนคง `try/except/finally` ไว้ เพราะต้อง rollback ด้วย
+  - กลไกจริงวัดด้วย `gc.get_referrers`: connection ที่รั่วถูกยึดโดย frame ของ `get_all` ผ่าน local `con`
+    ซึ่ง traceback ของ exception ถือไว้ จึงไม่ถูกปล่อยจนกว่า cycle collector จะทำงาน
+  - **ผลกระทบจริงไม่ตรงกับที่รีวิวอ้าง** รีวิวบอกว่า connection ค้างจะ hold shared lock ทำให้
+    checkpoint ไม่ได้และ `-wal` โตไม่หยุด ทดสอบตรงแล้วไม่เป็นอย่างนั้น: `PRAGMA wal_checkpoint(TRUNCATE)`
+    ทำงานสำเร็จ (busy=0) ทั้งก่อนและหลังแก้ เพราะ connection ที่เปิดค้างแบบ idle ไม่ได้ถือ read
+    transaction อยู่ ผลกระทบที่วัดได้จริงคือ **handle ของไฟล์ DB ค้างเปิด**: ก่อนแก้ handle ยังเปิดอยู่
+    หลัง GET ที่ล้ม (และหลังล้ม 1, 5, 25 ครั้ง) หลังแก้ไม่ค้างเลย
+  - test เพิ่มเป็น 59 ตัว (จาก 38) — `fail_sql` จดการเรียก `close()` แล้ว `unclosed()` รายงาน
+    connection ที่เปิดแล้วไม่ปิด จึงคุม route ทั้ง 14 ตัวด้วย test ชุดเดียวแทนการไล่ดูทีละจุด
 
 - **แก้ Important ข้อ 10 และ Minor ข้อ 19 (22/10/2026)** — validate ไฟล์อัปโหลดฝั่ง server
   - เพิ่มค่าคงที่ `MAX_PDF_SIZE = 100 MB` ([app.py](app.py):34) ให้ตรงกับที่ UI บอกผู้ใช้

@@ -13,12 +13,15 @@ python app.py        # pywebview window (or browser fallback on http://127.0.0.1
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest     # 38 tests, ~0.7s
+python -m pytest     # 59 tests, ~1.1s
 ```
 
 Tests monkeypatch `DB_PATH` + `UPLOAD_FOLDER` to pytest's `tmp_path` — they must never touch
 `hr_promotion.db` or `static/uploads/`. The `fail_sql` fixture deliberately avoids `monkeypatch`
-(its `undo()` would restore the real paths mid-test). No `xfail` is currently parked; when you
+(its `undo()` would restore the real paths mid-test). That injector also records `close()`, so
+`fail_sql.unclosed()` reports connections a route opened and never closed. That is what pins the
+connection invariant under Architecture across all 14 routes, instead of eyeballing each site.
+No `xfail` is currently parked; when you
 write a test ahead of its fix, mark it `xfail(strict=True)` so the run goes red the moment the
 fix lands and the marker has to be removed, instead of a `skip` that rots silently.
 
@@ -31,11 +34,13 @@ Single-file backend: [app.py](app.py)
 
 | Concern | Detail |
 |---|---|
-| DB | `hr_promotion.db` — WAL mode, foreign_keys ON, fresh connection per request |
+| DB | `hr_promotion.db` — WAL mode, foreign_keys ON, fresh connection per request. **Invariant:** every `get_db()` call site closes deterministically. Read paths use `with closing(get_db()) as con:`; write paths use `try/except/finally: con.close()` because they also need rollback. A bare `con.close()` after `execute()` is skipped when the query raises, which leaks an OS handle on the DB file until a GC pass |
 | File storage | `static/uploads/<uuid>.pdf` — no BLOBs in DB. **Invariant:** every disk delete happens *after* `con.commit()` (read `stored_name` first, delete later). Deleting before commit means a rollback leaves a row pointing at a missing file — worse than an orphan file |
 | Frontend libs | `static/vendor/` — Bootstrap, Chart.js, Font Awesome, Sarabun are **self-hosted**. Never move them back to a CDN: this ships as an offline `.exe`. PyInstaller must `--add-data "static/vendor;static/vendor"` |
 | Upload method | Frontend sends `multipart/form-data` (field `file` + `book_no`); the route also still accepts base64-in-JSON for curl (`MAX_CONTENT_LENGTH` = 110 MB) |
 | Upload validation | Server-side, **before touching disk**: non-empty, `<= MAX_PDF_SIZE` (100 MB, must match what the UI promises), `%PDF-` within the first 1024 bytes, and the record must exist. Both input paths share it. The client only checks extension + size, so never drop these |
+| Error responses | Routes **never** put `str(e)` in a response: it leaked absolute paths and SQL text, and `toastError` escalates anything over 80 characters to a blocking `alert()`. `fail()` is the one place that decides what a client sees; detail goes to the log. Keep every user-facing message under 80 characters |
+| Logging | `BASE_DIR/hr_promotion.log`, rotating at 1 MB × 3, wired in `_setup_logging()` from `main()` **only**. Not at import, or every test run would drop a log file in the repo. It is attached to both `log` and `app.logger`, so caught and unhandled tracebacks both land there. This file is the only remaining copy of the detail the client no longer gets |
 | Thai JSON | `app.json.ensure_ascii = False` — required everywhere. **Not** `app.config['JSON_AS_ASCII']`: Flask ≥ 2.3 ignores that key silently, which escapes Thai to `\uXXXX` and grows the payload ~23% |
 | BASE_DIR | Resolves for both `python app.py` and PyInstaller `.exe` via `sys.executable` check |
 | Port | 5000 (hardcoded) |
@@ -76,6 +81,8 @@ Upload replaces existing `(record_id, book_no)` pair — old file deleted from d
 | `sanitize_record(d)` | Whitelist RECORD_COLS; serialize eval*_rows → JSON string |
 | `validate_required(allowed)` | Return list of missing Thai field labels |
 | `sanitize_display_name(name, fallback)` | Clean the original filename for DB + `download_name` — strips path separators and control chars only, **keeps Thai**. Never use `secure_filename()` here: it drops all non-ASCII (`'ประกาศ.pdf'` → `'pdf'`) |
+| `fail(context, message, status)` | Log the live exception with `log.exception`, return a fixed Thai message. **Call only from inside an `except` block** — `log.exception` reads `sys.exc_info()`, so outside one it records `NoneType: None`. Statuses stay per-route: 422 for an integrity violation in `add_record`, 404 for a record that vanished mid-upload |
+| `_setup_logging()` | Attach the rotating file handler. Called from `main()`, never at import |
 | `_safe_remove(path)` | Delete file, swallow errors |
 | `_stored_path(stored_name)` | `UPLOAD_FOLDER / stored_name` |
 | `init_db()` | Create tables + additive ALTER TABLE migrations |

@@ -26,6 +26,7 @@ body{background:var(--bg);font-family:'Sarabun','Segoe UI',sans-serif;font-size:
 .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
 .dg{background:#22c55e;box-shadow:0 0 0 2px rgba(34,197,94,.3)}
 .dy{background:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.3)}
+.dr{background:#dc3545;box-shadow:0 0 0 2px rgba(220,53,69,.3)}
 .tnav{background:#fff;border-bottom:2px solid #dde3ef;padding:0 16px;position:sticky;top:0;
       z-index:100;box-shadow:0 2px 6px rgba(0,0,0,.07);display:flex;gap:2px;overflow-x:auto}
 .tbtn{border:none;background:none;padding:11px 18px;font-family:'Sarabun',sans-serif;font-size:.9rem;
@@ -595,7 +596,9 @@ async function apiFetch(path, method='GET', body=null){
     USE_FLASK = true;
     b.innerHTML = '<span class="dot dg"></span>Flask + SQLite ✓';
   } catch {
-    b.innerHTML = '<span class="dot dg"></span>LocalStorage (Offline)';
+    // แดง ไม่ใช่เขียว: โหมดนี้ไฟล์แนบใช้ไม่ได้และข้อมูลอยู่แค่ใน browser ของเครื่องนี้
+    // badge มีหน้าที่เดียวคือบอกว่ากำลังอยู่โหมดไหน ใช้สีเดียวกับโหมดปกติก็เท่ากับไม่ได้บอก
+    b.innerHTML = '<span class="dot dr"></span>LocalStorage (Offline)';
   }
   await loadAll();
 })();
@@ -1465,6 +1468,19 @@ async function clearAll(){
  * ================================================================ */
 
 /**
+ * csvCell — ทำให้ค่าหนึ่ง cell ปลอดภัยพอจะเปิดใน Excel โดยไม่ถูกตีความเป็นสูตร
+ *
+ * Excel อ่าน cell ที่ขึ้นต้นด้วย = + - @ tab หรือ CR เป็นสูตรและรันทันทีที่เปิดไฟล์
+ * การครอบด้วย " ตามกฎ CSV ไม่ช่วย เพราะ Excel ถอดเครื่องหมายคำพูดออกก่อนแล้วค่อยประเมิน
+ * นำหน้าด้วย single quote = บังคับให้ Excel อ่านเป็นข้อความ และไม่แสดง quote นั้นใน cell
+ *
+ * คู่แฝดฝั่ง server คือ `csv_cell()` ใน app.py แก้ที่นี่แล้วต้องแก้ที่นั่นด้วย
+ * ไม่อย่างนั้นไฟล์ที่ได้จากปุ่ม Export ฝั่ง client กับ /api/export/csv จะไม่เหมือนกัน
+ * @param {*} v  ค่าดิบจาก record
+ * @returns {string} ค่าที่ Excel จะแสดงเป็นข้อความเสมอ
+ */
+function csvCell(v){ const t=(v??'').toString(); return /^[=+\-@\t\r]/.test(t) ? "'"+t : t; }
+/**
  * dl — trigger การดาวน์โหลดไฟล์จาก string ใน memory
  * เทคนิคมาตรฐาน: ห่อเนื้อหาเป็น Blob → สร้าง object URL → คลิกลิงก์ <a download> จำลอง
  * @param {string} c  เนื้อหาไฟล์
@@ -1485,6 +1501,7 @@ function dl(c,n,t){ const a=document.createElement('a'); a.href=URL.createObject
  * Escape ตามกฎ CSV: ครอบทุกค่าด้วย " และแปลง " ภายในเป็น "" (กันค่า
  * ที่มี comma/ขึ้นบรรทัดใหม่ทำให้คอลัมน์เพี้ยน) + นำหน้าไฟล์ด้วย BOM
  * (U+FEFF) เพื่อให้ Excel บน Windows อ่านภาษาไทย UTF-8 ถูกต้อง
+ * ส่วนค่าที่ Excel จะตีความเป็นสูตรผ่าน csvCell() ก่อน (ดู jsdoc ของมัน)
  * @returns {undefined}
  */
 function exportAllCSV(){
@@ -1496,7 +1513,7 @@ function exportAllCSV(){
     }); return b;
   });
   const keys=[...new Set(flat.flatMap(r=>Object.keys(r)))];
-  const rows=flat.map(r=>keys.map(k=>`"${(r[k]||'').toString().replace(/"/g,'""')}"`).join(','));
+  const rows=flat.map(r=>keys.map(k=>`"${csvCell(r[k]||'').replace(/"/g,'""')}"`).join(','));
   dl('﻿'+[keys.join(','),...rows].join('\n'),`hr_promo_${dStr()}.csv`,'text/csv;charset=utf-8');
   toast('Export CSV สำเร็จ ✓');
 }

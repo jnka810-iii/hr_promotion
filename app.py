@@ -302,103 +302,101 @@ def init_db():
         None (side effect: ไฟล์ DB และโฟลเดอร์ uploads ถูกสร้าง/อัปเดตให้พร้อมใช้)
     """
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    con = get_db()
-
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS records (
-            id                INTEGER PRIMARY KEY AUTOINCREMENT,
-            p1_title          TEXT NOT NULL DEFAULT '',
-            p1_fname          TEXT NOT NULL DEFAULT '',
-            p1_lname          TEXT NOT NULL DEFAULT '',
-            p1_edu            TEXT,
-            p1_edu_major      TEXT,
-            p2_pos_current    TEXT NOT NULL DEFAULT '',
-            p2_pos_level      TEXT,
-            p2_empid          TEXT NOT NULL DEFAULT '',
-            p2_dept           TEXT,
-            p2_sec            TEXT,
-            p2_org            TEXT,
-            p3_pos            TEXT,
-            p3_pos_level      TEXT,
-            p3_empid          TEXT,
-            p3_dept           TEXT,
-            p3_sec            TEXT,
-            p3_org            TEXT,
-            p3_announcement   TEXT,
-            p4_work1_title    TEXT,
-            p4_work1_year     TEXT,
-            p4_work2_title    TEXT,
-            p4_work2_year     TEXT,
-            p4_work3_title    TEXT,
-            p4_work3_year     TEXT,
-            p4_concept_title  TEXT,
-            p4_work_award     TEXT,
-            p5_doc_received   TEXT,
-            p5_work_result    TEXT,
-            p5_work_score     TEXT,
-            p5_work_eval_date TEXT,
-            eval51_rows       TEXT NOT NULL DEFAULT '[]',
-            eval52_rows       TEXT NOT NULL DEFAULT '[]',
-            created           TEXT,
-            updated           TEXT
-        )
-    """)
-
-    # ตรวจสอบ attachments table
-    att_exists = con.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'"
-    ).fetchone()
-
-    if att_exists:
-        att_cols = {row[1] for row in con.execute("PRAGMA table_info(attachments)").fetchall()}
-        if 'file_data' in att_cols:
-            # schema เก่า → migrate BLOB → files
-            _migrate_blobs_to_files(con)
-    else:
-        # สร้างตารางใหม่ (ไม่มี file_data BLOB)
+    with closing(get_db()) as con:
         con.execute("""
-            CREATE TABLE attachments (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                record_id   INTEGER NOT NULL,
-                book_no     TEXT    NOT NULL,
-                filename    TEXT    NOT NULL,
-                stored_name TEXT    NOT NULL DEFAULT '',
-                mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
-                file_size   INTEGER,
-                uploaded_at TEXT,
-                FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+            CREATE TABLE IF NOT EXISTS records (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                p1_title          TEXT NOT NULL DEFAULT '',
+                p1_fname          TEXT NOT NULL DEFAULT '',
+                p1_lname          TEXT NOT NULL DEFAULT '',
+                p1_edu            TEXT,
+                p1_edu_major      TEXT,
+                p2_pos_current    TEXT NOT NULL DEFAULT '',
+                p2_pos_level      TEXT,
+                p2_empid          TEXT NOT NULL DEFAULT '',
+                p2_dept           TEXT,
+                p2_sec            TEXT,
+                p2_org            TEXT,
+                p3_pos            TEXT,
+                p3_pos_level      TEXT,
+                p3_empid          TEXT,
+                p3_dept           TEXT,
+                p3_sec            TEXT,
+                p3_org            TEXT,
+                p3_announcement   TEXT,
+                p4_work1_title    TEXT,
+                p4_work1_year     TEXT,
+                p4_work2_title    TEXT,
+                p4_work2_year     TEXT,
+                p4_work3_title    TEXT,
+                p4_work3_year     TEXT,
+                p4_concept_title  TEXT,
+                p4_work_award     TEXT,
+                p5_doc_received   TEXT,
+                p5_work_result    TEXT,
+                p5_work_score     TEXT,
+                p5_work_eval_date TEXT,
+                eval51_rows       TEXT NOT NULL DEFAULT '[]',
+                eval52_rows       TEXT NOT NULL DEFAULT '[]',
+                created           TEXT,
+                updated           TEXT
             )
         """)
 
-    # เพิ่มคอลัมน์ใน records ที่อาจขาดหาย (backward compat)
-    existing = {row[1] for row in con.execute("PRAGMA table_info(records)").fetchall()}
-    new_cols = {
-        'p3_pos': 'TEXT', 'p3_pos_level': 'TEXT', 'p3_empid': 'TEXT',
-        'p3_dept': 'TEXT', 'p3_sec': 'TEXT', 'p3_org': 'TEXT',
-        'p3_announcement': 'TEXT',
-        'p4_work1_title': 'TEXT', 'p4_work1_year': 'TEXT',
-        'p4_work2_title': 'TEXT', 'p4_work2_year': 'TEXT',
-        'p4_work3_title': 'TEXT', 'p4_work3_year': 'TEXT',
-        'p4_concept_title': 'TEXT', 'p4_work_award': 'TEXT',
-        'p5_doc_received': 'TEXT', 'p5_work_result': 'TEXT',
-        'p5_work_score': 'TEXT', 'p5_work_eval_date': 'TEXT',
-        'eval51_rows': "TEXT NOT NULL DEFAULT '[]'",
-        'eval52_rows': "TEXT NOT NULL DEFAULT '[]'",
-        'p1_title':       "TEXT NOT NULL DEFAULT ''",
-        'p1_fname':       "TEXT NOT NULL DEFAULT ''",
-        'p1_lname':       "TEXT NOT NULL DEFAULT ''",
-        'p1_edu': 'TEXT', 'p1_edu_major': 'TEXT',
-        'p2_pos_current': "TEXT NOT NULL DEFAULT ''",
-        'p2_pos_level': 'TEXT',
-        'p2_empid':       "TEXT NOT NULL DEFAULT ''",
-        'p2_dept': 'TEXT', 'p2_sec': 'TEXT', 'p2_org': 'TEXT',
-    }
-    for col, ctype in new_cols.items():
-        if col not in existing:
-            con.execute(f'ALTER TABLE records ADD COLUMN {col} {ctype}')
+        # ตรวจสอบ attachments table
+        att_exists = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'"
+        ).fetchone()
 
-    con.commit()
-    con.close()
+        if att_exists:
+            att_cols = {row[1] for row in con.execute("PRAGMA table_info(attachments)").fetchall()}
+            if 'file_data' in att_cols:
+                # schema เก่า → migrate BLOB → files
+                _migrate_blobs_to_files(con)
+        else:
+            # สร้างตารางใหม่ (ไม่มี file_data BLOB)
+            con.execute("""
+                CREATE TABLE attachments (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    record_id   INTEGER NOT NULL,
+                    book_no     TEXT    NOT NULL,
+                    filename    TEXT    NOT NULL,
+                    stored_name TEXT    NOT NULL DEFAULT '',
+                    mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
+                    file_size   INTEGER,
+                    uploaded_at TEXT,
+                    FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+                )
+            """)
+
+        # เพิ่มคอลัมน์ใน records ที่อาจขาดหาย (backward compat)
+        existing = {row[1] for row in con.execute("PRAGMA table_info(records)").fetchall()}
+        new_cols = {
+            'p3_pos': 'TEXT', 'p3_pos_level': 'TEXT', 'p3_empid': 'TEXT',
+            'p3_dept': 'TEXT', 'p3_sec': 'TEXT', 'p3_org': 'TEXT',
+            'p3_announcement': 'TEXT',
+            'p4_work1_title': 'TEXT', 'p4_work1_year': 'TEXT',
+            'p4_work2_title': 'TEXT', 'p4_work2_year': 'TEXT',
+            'p4_work3_title': 'TEXT', 'p4_work3_year': 'TEXT',
+            'p4_concept_title': 'TEXT', 'p4_work_award': 'TEXT',
+            'p5_doc_received': 'TEXT', 'p5_work_result': 'TEXT',
+            'p5_work_score': 'TEXT', 'p5_work_eval_date': 'TEXT',
+            'eval51_rows': "TEXT NOT NULL DEFAULT '[]'",
+            'eval52_rows': "TEXT NOT NULL DEFAULT '[]'",
+            'p1_title':       "TEXT NOT NULL DEFAULT ''",
+            'p1_fname':       "TEXT NOT NULL DEFAULT ''",
+            'p1_lname':       "TEXT NOT NULL DEFAULT ''",
+            'p1_edu': 'TEXT', 'p1_edu_major': 'TEXT',
+            'p2_pos_current': "TEXT NOT NULL DEFAULT ''",
+            'p2_pos_level': 'TEXT',
+            'p2_empid':       "TEXT NOT NULL DEFAULT ''",
+            'p2_dept': 'TEXT', 'p2_sec': 'TEXT', 'p2_org': 'TEXT',
+        }
+        for col, ctype in new_cols.items():
+            if col not in existing:
+                con.execute(f'ALTER TABLE records ADD COLUMN {col} {ctype}')
+
+        con.commit()
 
 
 # ────────────────────────────────────────────────
@@ -514,9 +512,8 @@ def get_all():
         Response: JSON array ของทุก record (eval51_rows/eval52_rows ยังเป็น
                   JSON string ตามที่เก็บใน DB — frontend parse เอง)
     """
-    con = get_db()
-    rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
-    con.close()
+    with closing(get_db()) as con:
+        rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
 @app.route('/api/records/<int:rid>', methods=['GET'])
@@ -531,9 +528,8 @@ def get_one(rid):
         Response: JSON object ของ record นั้น (200)
                   หรือ {'error': 'not found'} (404) ถ้าไม่มี id นี้
     """
-    con = get_db()
-    row = con.execute('SELECT * FROM records WHERE id=?', [rid]).fetchone()
-    con.close()
+    with closing(get_db()) as con:
+        row = con.execute('SELECT * FROM records WHERE id=?', [rid]).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     return jsonify(row_to_dict(row))
@@ -722,12 +718,11 @@ def list_attachments(rid):
         Response: JSON array ของ metadata ไฟล์แนบ เรียงตาม book_no
                   (record ที่ไม่มีไฟล์จะได้ [] — ไม่ถือเป็น error)
     """
-    con = get_db()
-    rows = con.execute(
-        'SELECT id, record_id, book_no, filename, mime_type, file_size, uploaded_at '
-        'FROM attachments WHERE record_id=? ORDER BY book_no', [rid]
-    ).fetchall()
-    con.close()
+    with closing(get_db()) as con:
+        rows = con.execute(
+            'SELECT id, record_id, book_no, filename, mime_type, file_size, uploaded_at '
+            'FROM attachments WHERE record_id=? ORDER BY book_no', [rid]
+        ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
 @app.route('/api/records/<int:rid>/attachments', methods=['POST'])
@@ -883,9 +878,8 @@ def download_attachment(att_id):
     Returns:
         Response: ไฟล์ PDF (200) หรือ JSON error (404)
     """
-    con = get_db()
-    row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
-    con.close()
+    with closing(get_db()) as con:
+        row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     fp = _stored_path(row['stored_name'])
@@ -909,9 +903,8 @@ def preview_attachment(att_id):
     Returns:
         Response: ไฟล์ PDF แสดง inline (200) หรือ JSON error (404)
     """
-    con = get_db()
-    row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
-    con.close()
+    with closing(get_db()) as con:
+        row = con.execute('SELECT * FROM attachments WHERE id=?', [att_id]).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     fp = _stored_path(row['stored_name'])
@@ -998,16 +991,15 @@ def stats():
             'by_level':  [{level, cnt}, ...]   แยกตามระดับตำแหน่งปัจจุบัน
         }
     """
-    con = get_db()
-    total  = con.execute('SELECT COUNT(*) FROM records').fetchone()[0]
-    passed = con.execute("SELECT COUNT(*) FROM records WHERE p5_work_result='ผ่าน'").fetchone()[0]
-    by_result = con.execute(
-        'SELECT p5_work_result as result, COUNT(*) as cnt FROM records GROUP BY p5_work_result'
-    ).fetchall()
-    by_level = con.execute(
-        'SELECT p2_pos_level as level, COUNT(*) as cnt FROM records GROUP BY p2_pos_level'
-    ).fetchall()
-    con.close()
+    with closing(get_db()) as con:
+        total  = con.execute('SELECT COUNT(*) FROM records').fetchone()[0]
+        passed = con.execute("SELECT COUNT(*) FROM records WHERE p5_work_result='ผ่าน'").fetchone()[0]
+        by_result = con.execute(
+            'SELECT p5_work_result as result, COUNT(*) as cnt FROM records GROUP BY p5_work_result'
+        ).fetchall()
+        by_level = con.execute(
+            'SELECT p2_pos_level as level, COUNT(*) as cnt FROM records GROUP BY p2_pos_level'
+        ).fetchall()
     return jsonify({'total': total, 'passed': passed,
                     'by_result': [dict(r) for r in by_result],
                     'by_level':  [dict(r) for r in by_level]})
@@ -1031,9 +1023,8 @@ def export_csv_server():
                   หรือ 204 No Content ถ้ายังไม่มีข้อมูลเลย
     """
     import csv, io as _io
-    con  = get_db()
-    rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
-    con.close()
+    with closing(get_db()) as con:
+        rows = con.execute('SELECT * FROM records ORDER BY id DESC').fetchall()
     if not rows:
         return '', 204
     buf = _io.StringIO()

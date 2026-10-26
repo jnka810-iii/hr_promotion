@@ -13,8 +13,11 @@
 """
 
 import base64
+import csv
+import io
 import os
 import sqlite3
+import threading
 
 import pytest
 
@@ -490,3 +493,221 @@ def test_item11_read_route_closes_connection_on_success(client, make_record, fai
     assert client.get('/api/records').status_code == 200
     assert fail_sql.handed_out
     assert fail_sql.unclosed() == []
+
+
+# ────────────────────────────────────────────────
+# ข้อ 14 — Content-Type ของ CSV export
+# ────────────────────────────────────────────────
+
+def test_item14_csv_content_type_declares_charset_once(client, make_record):
+    """
+    เดิมส่ง mimetype='text/csv; charset=utf-8-sig' ซึ่งใส่ parameter มาใน mimetype
+    แล้ว Werkzeug เติม charset ของตัวเองต่อท้ายอีกชั้น ได้ header ที่มี charset สองตัว
+    และตัวแรกเป็น utf-8-sig ซึ่งเป็นชื่อ codec ของ Python ไม่ใช่ charset ที่จดทะเบียนกับ IANA
+    """
+    make_record()
+    ct = client.get('/api/export/csv').headers['Content-Type']
+    assert ct.count('charset') == 1
+    assert 'utf-8-sig' not in ct
+    assert ct.startswith('text/csv')
+
+
+def test_item14_csv_still_starts_with_the_excel_bom(client, make_record):
+    """กันการแก้เกินเลย — BOM คือกลไกที่ทำให้ Excel อ่านไทยถูก ห้ามหายไปพร้อม charset"""
+    make_record()
+    assert client.get('/api/export/csv').get_data().startswith(b'\xef\xbb\xbf')
+
+
+# ────────────────────────────────────────────────
+# ข้อ 15 — CSV formula injection
+# ────────────────────────────────────────────────
+
+# Excel ตีความ cell ที่ขึ้นต้นด้วยอักขระพวกนี้เป็นสูตร การครอบด้วย " ไม่ช่วย
+# เพราะ Excel ถอดเครื่องหมายคำพูดของ CSV ออกก่อนแล้วจึงประเมินเนื้อหา
+FORMULA_LEADERS = ['=', '+', '-', '@', '\t', '\r']
+
+# ที่ผ่าน API ได้จริงมีแค่ 4 ตัวแรก — `sanitize_record` เรียก .strip() ซึ่งกิน \t และ \r
+# หัวค่าไปก่อนถึง DB เสมอ การเทสต์สองตัวนั้นผ่าน API จึงเป็น assertion ที่ fail ไม่ได้
+API_REACHABLE_LEADERS = ['=', '+', '-', '@']
+
+
+@pytest.mark.parametrize('lead', API_REACHABLE_LEADERS, ids=API_REACHABLE_LEADERS)
+def test_item15_server_export_neutralizes_formula_cells(client, make_record, lead):
+    """ค่าอันตรายต้องถูกทำให้ Excel มองเป็นข้อความ ไม่ใช่สูตรที่รันทันทีที่เปิดไฟล์"""
+    make_record(p1_fname=lead + 'HYPERLINK("http://evil.test","click")')
+    body = client.get('/api/export/csv').get_data().decode('utf-8-sig')
+    cells = [c for row in csv.reader(io.StringIO(body)) for c in row]
+    dangerous = [c for c in cells if c[:1] in FORMULA_LEADERS]
+    assert dangerous == [], 'cell ที่ Excel จะรันเป็นสูตร: %r' % dangerous
+    assert any('HYPERLINK' in c for c in cells), 'ข้อมูลต้องยังอยู่ ไม่ใช่ถูกลบทิ้ง'
+
+
+@pytest.mark.parametrize('lead', ['\t', '\r'], ids=['tab', 'cr'])
+def test_item15_export_neutralizes_rows_written_straight_to_the_db(
+        client, make_record, db, lead):
+    """
+    export อ่านจาก DB ตรง ๆ ไม่ได้อ่านจาก request แถวที่ไม่ได้ผ่าน API จึงมีหัวค่า
+    เป็น \t หรือ \r ได้ (fix_db.py แก้ DB ตรง ๆ เป็นงานที่โปรเจกต์นี้ทำจริง)
+    ด่านของ export ต้องกันตรงจุด export ไม่ใช่ฝากความหวังไว้กับ .strip() ขาเข้า
+    """
+    make_record()
+    con = db()
+    con.execute('UPDATE records SET p1_fname=?', [lead + 'HYPERLINK("http://evil.test","x")'])
+    con.commit()
+    con.close()
+    body = client.get('/api/export/csv').get_data().decode('utf-8-sig')
+    cells = [c for row in csv.reader(io.StringIO(body)) for c in row]
+    dangerous = [c for c in cells if c[:1] in FORMULA_LEADERS]
+    assert dangerous == [], 'cell ที่ Excel จะรันเป็นสูตร: %r' % dangerous
+
+
+def test_item15_ordinary_values_are_left_alone(client, make_record):
+    """กันการแก้เกินเลย — ค่าปกติต้องไม่ถูกเติมอะไรนำหน้า"""
+    make_record(p1_fname='สมหญิง', p2_empid='12345')
+    body = client.get('/api/export/csv').get_data().decode('utf-8-sig')
+    cells = [c for row in csv.reader(io.StringIO(body)) for c in row]
+    assert 'สมหญิง' in cells
+    assert '12345' in cells
+
+
+# ────────────────────────────────────────────────
+# ข้อ 16 และ 18 — index และกฎหนึ่งช่องหนึ่งไฟล์ที่ schema
+# ────────────────────────────────────────────────
+
+def test_item16_record_id_lookup_uses_an_index(db):
+    """
+    WHERE record_id=? เป็น query หลักของตาราง attachments และ ON DELETE CASCADE
+    ก็ใช้ทางเดียวกัน ถ้าไม่มี index ทั้งคู่ต้อง full scan ซึ่งช้าเป็น O(n) เมื่อไฟล์สะสมขึ้น
+    """
+    con = db()
+    plan = ' '.join(str(r[-1]) for r in con.execute(
+        'EXPLAIN QUERY PLAN SELECT id FROM attachments WHERE record_id=?', [1]).fetchall())
+    con.close()
+    assert 'SCAN' not in plan, plan
+    assert 'USING' in plan and 'INDEX' in plan, plan
+
+
+def test_item18_schema_rejects_two_files_in_one_slot(db, make_record):
+    """
+    กฎ "หนึ่ง record มีไฟล์ได้ช่องละหนึ่งไฟล์" ต้องถูกบังคับที่ schema ไม่ใช่ลำดับ
+    DELETE แล้ว INSERT ในโค้ด — เขียนตรงเข้า DB ก็ต้องถูกปฏิเสธ
+    """
+    rid = make_record()
+    con = db()
+    con.execute('INSERT INTO attachments (record_id, book_no, filename, stored_name) '
+                'VALUES (?,?,?,?)', [rid, '1', 'a.pdf', 'a.pdf'])
+    con.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        con.execute('INSERT INTO attachments (record_id, book_no, filename, stored_name) '
+                    'VALUES (?,?,?,?)', [rid, '1', 'b.pdf', 'b.pdf'])
+        con.commit()
+    con.close()
+
+
+def test_item18_different_slots_and_records_still_allowed(db, make_record):
+    """กันการแก้เกินเลย — UNIQUE ต้องคุมแค่คู่ (record_id, book_no) ไม่ใช่ทั้งคอลัมน์"""
+    r1, r2 = make_record(), make_record(p2_empid='999')
+    con = db()
+    for rid, slot in [(r1, '1'), (r1, '2'), (r1, 'ann'), (r2, '1')]:
+        con.execute('INSERT INTO attachments (record_id, book_no, filename, stored_name) '
+                    'VALUES (?,?,?,?)', [rid, slot, 'f.pdf', '%s_%s.pdf' % (rid, slot)])
+    con.commit()
+    assert con.execute('SELECT COUNT(*) FROM attachments').fetchone()[0] == 4
+    con.close()
+
+
+# ────────────────────────────────────────────────
+# ข้อ 18 — book_no ต้องอยู่ในช่องที่ UI มีจริง
+# ────────────────────────────────────────────────
+
+@pytest.mark.parametrize('slot', ['1', '2', '3', 'ann'])
+def test_item18_accepts_the_four_real_slots(client, make_record, upload, slot):
+    rid = make_record()
+    assert upload(rid, book_no=slot).status_code == 201
+
+
+@pytest.mark.parametrize('slot', ['ขยะ', '../../etc/passwd', '99', '', 'x' * 60, '0'])
+def test_item18_rejects_slots_the_ui_cannot_show(client, make_record, upload, uploads, db, slot):
+    """
+    book_no มาจาก client ตรง ๆ UI มีแค่ 4 ช่อง (1-3 และ ann) แต่ server รับอะไรก็ได้
+    ช่องที่ UI แสดงไม่ได้ = ไฟล์ที่ผู้ใช้มองไม่เห็นและลบไม่ได้ ต้องปฏิเสธตั้งแต่ก่อนแตะดิสก์
+    """
+    rid = make_record()
+    r = upload(rid, book_no=slot)
+    assert r.status_code == 400
+    assert uploads() == [], 'ปฏิเสธแล้วต้องไม่มีไฟล์ขยะเหลือ'
+    con = db()
+    assert con.execute('SELECT COUNT(*) FROM attachments').fetchone()[0] == 0
+    con.close()
+
+
+def test_item18_migration_dedupes_before_adding_the_unique_index(tmp_path, monkeypatch):
+    """
+    DB ที่มีอยู่แล้วอาจมีคู่ (record_id, book_no) ซ้ำอยู่ก่อน ถ้าสร้าง UNIQUE index ตรง ๆ
+    จะล้มทั้ง init_db แอปเปิดไม่ขึ้นเลย migration จึงต้องรวบให้เหลือแถวใหม่สุดก่อน
+    แล้วลบไฟล์ของแถวที่ทิ้ง (หลัง commit ตาม invariant ของ file storage)
+    """
+    monkeypatch.setattr(hr, 'DB_PATH', str(tmp_path / 'dup.db'))
+    monkeypatch.setattr(hr, 'UPLOAD_FOLDER', str(tmp_path / 'up'))
+    os.makedirs(hr.UPLOAD_FOLDER, exist_ok=True)
+    hr.init_db()
+
+    con = sqlite3.connect(hr.DB_PATH)
+    con.execute('INSERT INTO records (p1_fname, p1_lname, p2_pos_current, p2_empid) '
+                "VALUES ('ก','ข','ค','1')")
+    rid = con.execute('SELECT id FROM records').fetchone()[0]
+    con.execute('DROP INDEX IF EXISTS idx_att_record_book')      # ย้อนสภาพเป็น DB ก่อนแก้
+    for name in ('old.pdf', 'mid.pdf', 'new.pdf'):
+        open(os.path.join(hr.UPLOAD_FOLDER, name), 'wb').close()
+        con.execute('INSERT INTO attachments (record_id, book_no, filename, stored_name) '
+                    'VALUES (?,?,?,?)', [rid, '1', name, name])
+    con.commit()
+    con.close()
+
+    hr.init_db()                                                  # ต้องไม่โยน exception
+
+    con = sqlite3.connect(hr.DB_PATH)
+    rows = con.execute('SELECT stored_name FROM attachments WHERE record_id=?', [rid]).fetchall()
+    idx = con.execute("SELECT name FROM sqlite_master WHERE type='index' "
+                      "AND name='idx_att_record_book'").fetchone()
+    con.close()
+    assert [r[0] for r in rows] == ['new.pdf'], 'ต้องเหลือแถวใหม่สุดแถวเดียว'
+    assert idx is not None, 'unique index ต้องถูกสร้างหลังรวบแถวซ้ำ'
+    assert sorted(os.listdir(hr.UPLOAD_FOLDER)) == ['new.pdf'], 'ไฟล์ของแถวที่ทิ้งต้องถูกลบ'
+
+
+def test_item18_concurrent_uploads_to_one_slot_leave_no_orphan_files(
+        client, make_record, uploads, db):
+    """
+    sqlite serialise ตัวเขียนอยู่แล้ว จึงไม่เคยเกิดสองแถวในช่องเดียวตามที่รีวิวคาดไว้
+    ของจริงที่เกิดคือ **ไฟล์กำพร้า**: แต่ละ request อ่าน stored_name เก่าใน snapshot
+    ของตัวเองก่อนจะได้ write lock หลาย request จึงเห็นค่าเดียวกัน แล้วไฟล์ที่ผู้แพ้
+    แทนที่ไปก็ไม่มีใครลบ invariant ที่ต้องจริงเสมอคือ ไฟล์บนดิสก์ = แถวใน DB
+    """
+    rid = make_record()
+    codes, lock = [], threading.Lock()
+    start = threading.Barrier(6)
+
+    def go(i):
+        start.wait()
+        r = client.post('/api/records/%d/attachments' % rid,
+                        data={'book_no': '1',
+                              'file': (io.BytesIO(b'%PDF-1.4 ' + str(i).encode()), 'f.pdf')},
+                        content_type='multipart/form-data')
+        with lock:
+            codes.append(r.status_code)
+
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    con = db()
+    stored = {r[0] for r in con.execute(
+        'SELECT stored_name FROM attachments WHERE record_id=?', [rid]).fetchall()}
+    con.close()
+    on_disk = set(uploads())
+    assert codes.count(201) == 6
+    assert len(stored) == 1, 'ช่องเดียวต้องเหลือแถวเดียว'
+    assert on_disk == stored, 'ไฟล์กำพร้า: %r' % sorted(on_disk - stored)

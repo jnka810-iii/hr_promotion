@@ -899,3 +899,114 @@ def test_item25_single_missing_field_is_named(client):
     assert r.status_code == 422
     assert r.get_json()['error'] == 'กรุณากรอกนามสกุล'
     assert len(r.get_json()['error']) < MAX_CLIENT_MESSAGE
+# ────────────────────────────────────────────────
+# ข้อ 8 — migration ที่ล้มกลางทางต้องไม่ทิ้งไฟล์กำพร้าไว้
+# ────────────────────────────────────────────────
+
+BLOB_SCHEMA = """
+    CREATE TABLE attachments (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id   INTEGER NOT NULL,
+        book_no     TEXT    NOT NULL,
+        filename    TEXT    NOT NULL,
+        mime_type   TEXT    NOT NULL DEFAULT 'application/pdf',
+        file_size   INTEGER,
+        file_data   BLOB    NOT NULL,
+        uploaded_at TEXT,
+        FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+    )
+"""
+
+BLOBS = ['%PDF-1.4 เล่มที่หนึ่ง'.encode('utf-8'), '%PDF-1.4 เล่มที่สอง'.encode('utf-8')]
+
+
+def _revert_to_blob_schema(db):
+    """
+    พา DB กลับไปเป็น schema ยุค BLOB เพื่อให้ init_db() เรียก migration จริง
+    (สร้างมือทั้งไฟล์จะต้องลอก schema ของ records มาด้วย ซึ่งไม่เกี่ยวกับข้อนี้เลย)
+    """
+    con = db()
+    rid = con.execute("INSERT INTO records (p1_fname, p1_lname) VALUES ('ก', 'ข')").lastrowid
+    con.execute('DROP TABLE attachments')
+    con.execute(BLOB_SCHEMA)
+    for i, blob in enumerate(BLOBS):
+        con.execute(
+            'INSERT INTO attachments (record_id, book_no, filename, file_size, file_data, '
+            'uploaded_at) VALUES (?,?,?,?,?,?)',
+            [rid, str(i + 1), 'ผลงาน%d.pdf' % (i + 1), len(blob), blob, '01/01/2026 00:00'])
+    con.commit()
+    con.close()
+    return rid
+
+
+def test_item8_migration_moves_each_blob_to_its_own_file(hr_app, db, uploads):
+    """เส้นทางปกติก่อน — ถ้าอันนี้ไม่ผ่าน test ที่เหลือก็ไม่ได้วัดอะไร"""
+    _revert_to_blob_schema(db)
+    hr.init_db()
+
+    files = uploads()
+    assert len(files) == len(BLOBS)
+    con = db()
+    rows = con.execute('SELECT stored_name FROM attachments ORDER BY id').fetchall()
+    cols = {r[1] for r in con.execute('PRAGMA table_info(attachments)')}
+    con.close()
+    assert 'file_data' not in cols
+    assert sorted(r['stored_name'] for r in rows) == sorted(files)
+    on_disk = []
+    for name in files:
+        with open(os.path.join(hr.UPLOAD_FOLDER, name), 'rb') as f:
+            on_disk.append(f.read())
+    assert sorted(on_disk) == sorted(BLOBS)
+
+
+def test_item8_failed_migration_leaves_no_orphan_files(hr_app, db, uploads, fail_sql):
+    """
+    ไฟล์บนดิสก์ไม่มี transaction ให้ rollback ถ้า migration ล้มหลังเขียนไฟล์ไปแล้ว
+    DB ถอนกลับเองได้ แต่ไฟล์ชุดนั้นค้างอยู่โดยไม่มีแถวไหนชี้ถึง
+    """
+    _revert_to_blob_schema(db)
+    fail_sql('INSERT INTO ATTACHMENTS_V2')
+    with pytest.raises(Exception):
+        hr.init_db()
+
+    assert uploads() == []
+
+
+def test_item8_failed_migration_leaves_the_old_schema_intact(hr_app, db, uploads, fail_sql):
+    """BLOB ต้องยังอยู่ครบ ไม่งั้นผลงานของผู้ใช้หายไปกับ migration ที่ล้ม"""
+    _revert_to_blob_schema(db)
+    fail_sql('INSERT INTO ATTACHMENTS_V2')
+    with pytest.raises(Exception):
+        hr.init_db()
+    fail_sql.disarm()
+
+    con = db()
+    cols = {r[1] for r in con.execute('PRAGMA table_info(attachments)')}
+    rows = con.execute('SELECT file_data, stored_name FROM attachments ORDER BY id').fetchall()
+    con.close()
+    assert 'file_data' in cols
+    assert sorted(bytes(r['file_data']) for r in rows) == sorted(BLOBS)
+    # ไม่มีแถวไหนถือ stored_name ค้างไว้ — นี่คือเหตุผลที่ WHERE ที่รีวิวเสนอกรองอะไรไม่ได้เลย
+    assert all(not r['stored_name'] for r in rows)
+
+
+def test_item8_rerun_after_a_failure_writes_one_file_per_row(hr_app, db, uploads, fail_sql):
+    """
+    รันใหม่หลังแก้สาเหตุแล้วต้องได้ไฟล์เท่าจำนวนแถว ไม่ใช่สองเท่า
+    ("กินพื้นที่เท่าตัวทุกรอบที่ล้ม" ตามที่รีวิวข้อนี้กังวลไว้)
+    """
+    _revert_to_blob_schema(db)
+    fail_sql('INSERT INTO ATTACHMENTS_V2')
+    with pytest.raises(Exception):
+        hr.init_db()
+    fail_sql.disarm()
+
+    hr.init_db()
+
+    files = uploads()
+    assert len(files) == len(BLOBS)
+    con = db()
+    rows = con.execute('SELECT stored_name FROM attachments ORDER BY id').fetchall()
+    con.close()
+    assert sorted(r['stored_name'] for r in rows) == sorted(files)
+

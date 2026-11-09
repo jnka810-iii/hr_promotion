@@ -74,7 +74,7 @@ textarea.form-control{resize:vertical}
 .btn-save:hover{background:linear-gradient(135deg,#0f2248,var(--pr));color:#fff}
 .btn-add{background:linear-gradient(135deg,#198754,#20c997);color:#fff;border:none;font-size:.85rem}
 .btn-add:hover{background:linear-gradient(135deg,#145c38,#198754);color:#fff}
-#tbl{font-size:.79rem;min-width:950px}
+#tbl{font-size:.79rem;min-width:1040px}
 #tbl thead th{background:linear-gradient(90deg,var(--pr),var(--pr2));color:#fff;
               white-space:nowrap;font-weight:600;font-size:.77rem;padding:8px 10px}
 #tbl tbody td{vertical-align:middle;padding:7px 10px}
@@ -397,6 +397,11 @@ textarea.form-control{resize:vertical}
       <option>ผ่าน</option><option>ไม่ผ่าน</option>
       <option>รอผล</option><option>ขอแก้ไข</option>
     </select>
+    <select class="form-select" id="sort-by" style="max-width:230px" onchange="renderTable()">
+      <option value="">เรียงตามลำดับที่บันทึก</option>
+      <option value="doc_asc">วันที่รับเอกสาร: เก่า → ใหม่</option>
+      <option value="doc_desc">วันที่รับเอกสาร: ใหม่ → เก่า</option>
+    </select>
     <button class="btn btn-success" onclick="exportAllCSV()"><i class="fa fa-file-csv me-1"></i>Export CSV</button>
     <button class="btn btn-warning text-dark" onclick="exportAllJSON()"><i class="fa fa-file-code me-1"></i>Export JSON</button>
     <button class="btn btn-outline-danger" onclick="clearAll()"><i class="fa fa-trash me-1"></i>ลบทั้งหมด</button>
@@ -410,7 +415,7 @@ textarea.form-control{resize:vertical}
           <th>ตำแหน่งปัจจุบัน</th><th>ระดับ</th>
           <th>กลุ่มงาน</th><th>สำนัก/กอง</th>
           <th>คะแนนเฉลี่ย</th><th>ผลงาน</th>
-          <th>วันที่บันทึก</th><th>จัดการ</th>
+          <th>วันที่รับเอกสาร</th><th>วันที่บันทึก</th><th>จัดการ</th>
         </tr>
       </thead>
       <tbody id="tbody"></tbody>
@@ -521,6 +526,19 @@ const API_BASE = '/api/records';   // endpoint หลักของ records ฝ
 const LS_KEY   = 'hr_promo_v5';    // key ใน localStorage (เปลี่ยน version เมื่อ schema เปลี่ยน)
 let USE_FLASK  = false;            // true = คุยกับ Flask, false = ใช้ LocalStorage
 let allRecords = [];               // cache รายการ record ทั้งหมดในหน่วยความจำ (refresh ผ่าน loadAll)
+/* สภาวะของ `allRecords` — มีไว้เพราะ `[]` ตัวเดียวเคยแทนความหมายสามอย่างที่ต่างกัน
+ * สิ้นเชิง แล้วทั้งสามแสดงผลเป็น "0 รายการ" เหมือนกันหมด ผู้ใช้จึงแยกไม่ออกว่า
+ * ข้อมูลหายหรือระบบพัง `0` เป็นคำตอบที่ผิดเมื่อความจริงคือ "ไม่มีคำตอบ"
+ *   'loading' ยังไม่รู้ — `loadAll` รอบแรกยังไม่เสร็จ
+ *   'loaded'  เชื่อถือได้ — จำนวนที่เห็นคือจำนวนจริง `0` จึงหมายถึงว่างจริง
+ *   'stale'   โหลดรอบหลังล้ม — ข้อมูลเป็นของรอบที่สำเร็จก่อนหน้า ยังใช้ได้แต่อาจเก่า
+ *   'failed'  โหลดไม่สำเร็จและไม่เคยสำเร็จ — ไม่มีข้อมูลให้แสดงเลย
+ * ดู GLOSSARY.md */
+let loadState  = 'loading';
+// เครื่องหมายแทน "ไม่รู้" บนตัวเลขทุกจุด — ไม่ใช่ 0 เพราะ 0 คือการตอบคำถามที่ตอบไม่ได้
+const UNKNOWN  = '—';
+// จำนวนคอลัมน์ของ #tbl — แถวสถานะ (โหลด/ล้ม/ว่าง) ใช้ colspan เท่านี้
+const TBL_COLS = 12;
 let charts     = {};               // เก็บ Chart.js instance รายกราฟ ไว้ destroy ก่อนวาดใหม่ (กัน memory leak)
 const COLORS   = ['#1976D2','#c8a951','#198754','#dc3545','#0dcaf0','#6f42c1','#fd7e14','#20c997'];
 
@@ -593,29 +611,60 @@ async function apiFetch(path, method='GET', body=null){
   if(!r.ok){
     let msg = `HTTP ${r.status}`;
     try{ const j=await r.json(); if(j?.error) msg=j.error; }catch{}
-    throw new Error(msg);
+    // ติด status ไว้บน Error เพื่อให้ผู้เรียกแยก "server ตอบว่าพัง" ออกจาก
+    // "ไม่มี server เลย" ได้ — fetch ที่ reject เองจะไม่มี property นี้
+    const e = new Error(msg);
+    e.httpStatus = r.status;
+    throw e;
   }
   return r.json();
 }
 
 /**
- * Startup probe (IIFE รันทันทีตอนโหลดหน้า):
- * ลองยิง GET /api/records หนึ่งครั้งเพื่อ "ตรวจว่ามี Flask backend ไหม"
- * — สำเร็จ → โหมด Flask+SQLite, ล้มเหลว → โหมด LocalStorage (offline)
- * แล้วอัปเดต badge มุมขวาบนให้ผู้ใช้รู้ว่ากำลังทำงานโหมดไหน
- * จากนั้นค่อยโหลดข้อมูลรอบแรกผ่าน loadAll()
+ * detectMode — ตัดสินว่าจะคุยกับ Flask หรือ LocalStorage แล้วตั้งไฟสถานะ
+ *
+ * ยิง GET /api/records หนึ่งครั้ง แล้วแยก "ความล้มเหลว" ออกเป็นสองอย่างที่
+ * ต้องการการตอบสนองคนละแบบ — ของเดิมมี `catch{}` ตัวเดียวกลืนทั้งคู่:
+ *
+ *   fetch reject (ไม่มี httpStatus) = ไม่มี backend จริง ๆ (เปิดไฟล์ html ตรง ๆ
+ *     หรือ server ไม่ขึ้น) → โหมด LocalStorage ถูกต้องแล้ว ไฟแดง
+ *   5xx (มี httpStatus) = backend **มีอยู่และมีข้อมูล** แค่ล้มชั่วคราว
+ *     → ต้องอยู่โหมด Flask แล้วรายงาน error ไฟเหลือง
+ *
+ * การสลับไปอ่าน LocalStorage ที่ว่างเปล่าตอน backend ตอบ 500 คือการเอาที่เก็บ
+ * ผิดอันมาตอบ แล้วรายงานว่า "0 รายการ" ทั้งที่ SQLite มีข้อมูลอยู่ครบ
+ * เหตุผลเต็มอยู่ใน docs/adr/0001-fallback-only-when-there-is-no-backend.md
+ *
+ * ไฟสามสีจึงอ่านได้ตรงความหมาย: เขียว = ปกติ, เหลือง = backend มีแต่มีปัญหา,
+ * แดง = ไม่มี backend อยู่โหมด offline จริง ๆ (โหมดนี้ไฟล์แนบใช้ไม่ได้และ
+ * ข้อมูลอยู่แค่ใน browser ของเครื่องนี้ จึงต้องไม่ใช่สีเดียวกับโหมดปกติ)
+ *
+ * @returns {Promise<string>} โหมดที่เลือก: 'flask' | 'flask-error' | 'offline'
  */
-(async()=>{
+async function detectMode(){
   const b = document.getElementById('mode-badge');
   try{
     await apiFetch(API_BASE);
     USE_FLASK = true;
     b.innerHTML = '<span class="dot dg"></span>Flask + SQLite ✓';
-  } catch {
-    // แดง ไม่ใช่เขียว: โหมดนี้ไฟล์แนบใช้ไม่ได้และข้อมูลอยู่แค่ใน browser ของเครื่องนี้
-    // badge มีหน้าที่เดียวคือบอกว่ากำลังอยู่โหมดไหน ใช้สีเดียวกับโหมดปกติก็เท่ากับไม่ได้บอก
+    return 'flask';
+  } catch(err) {
+    // เขียน USE_FLASK ออกมาตรง ๆ ทั้งสองทาง ไม่พิงค่าเริ่มต้นที่ประกาศไว้ไกล —
+    // การพิงค่านั้นคือเหตุผลที่บั๊ก "500 แล้วตกไปโหมด offline" มองไม่เห็นตั้งแต่แรก
+    if(err.httpStatus){
+      USE_FLASK = true;
+      b.innerHTML = '<span class="dot dy"></span>Flask + SQLite — อ่านข้อมูลไม่สำเร็จ';
+      return 'flask-error';
+    }
+    USE_FLASK = false;
     b.innerHTML = '<span class="dot dr"></span>LocalStorage (Offline)';
+    return 'offline';
   }
+}
+
+// Startup (IIFE รันทันทีตอนโหลดหน้า): เลือกโหมด → โหลดข้อมูลรอบแรก
+(async()=>{
+  await detectMode();
   await loadAll();
 })();
 
@@ -631,8 +680,46 @@ async function dbAdd(d){   return USE_FLASK ? apiFetch(API_BASE,'POST',d) : LS.a
 async function dbUpd(id,d){ USE_FLASK ? await apiFetch(`${API_BASE}/${id}`,'PUT',d) : LS.upd(id,d); }
 async function dbDel(id){   USE_FLASK ? await apiFetch(`${API_BASE}/${id}`,'DELETE') : LS.del(id); }
 async function dbClear(){   USE_FLASK ? await apiFetch(API_BASE,'DELETE') : LS.clear(); }
-// โหลดข้อมูลทั้งหมดเข้า cache `allRecords` + อัปเดตตัวเลขบน tab "รายการทั้งหมด"
-async function loadAll(){ allRecords = await dbGetAll(); document.getElementById('badge-count').textContent = allRecords.length; }
+/**
+ * loadAll — โหลดข้อมูลทั้งหมดเข้า cache `allRecords` + อัปเดตตัวเลขบน tab
+ *
+ * **ไม่ throw** — `catch` อยู่ที่นี่ที่เดียว เพราะผู้เรียกมี 7 จุดและก่อนหน้านี้
+ * ไม่มีจุดใดเลยที่ catch ข้อความ error ภาษาไทยที่ server ส่งมาจึงตายใน
+ * unhandled rejection แล้วหน้าจอค้างที่ "0 รายการ" โดยไม่บอกอะไรผู้ใช้เลย
+ * การ throw ต่อให้ผู้เรียกจัดการเองคือการเดิมพันว่าจุดที่ 8 จะไม่ลืม
+ *
+ * คืน `loadState` ไม่ใช่ `undefined` เพราะผู้เรียกบางจุดต้องแยก "โหลดสำเร็จและ
+ * ว่างจริง" ออกจาก "โหลดไม่สำเร็จ" ให้ได้
+ *
+ * @returns {Promise<string>} สภาวะล่าสุด: 'loaded' | 'stale' | 'failed'
+ */
+async function loadAll(){
+  try{
+    const rows = await dbGetAll();
+    // กันรูปร่างข้อมูลผิด: ถ้าไม่ใช่ array ทุกอย่างที่ตามมา (.length, .filter)
+    // จะพังที่อื่นแล้วอ่านไม่ออกว่าต้นเหตุคืออะไร
+    if(!Array.isArray(rows)) throw new Error('ข้อมูลที่ได้จากระบบไม่ถูกต้อง');
+    allRecords = rows;
+    loadState  = 'loaded';
+  }catch(err){
+    // ข้อมูลของรอบที่สำเร็จก่อนหน้ายังอยู่ใน allRecords เพราะ throw เกิดก่อน assign
+    // คงไว้แล้วติดป้ายว่าเก่า ดีกว่าล้างทิ้ง — ล้างทิ้งคือการทำลายข้อมูลชุดเดียว
+    // ที่ผู้ใช้มีอยู่บนจอ แล้วพากลับไปที่ "ตารางว่างโดยไม่มีคำอธิบาย"
+    loadState = allRecords.length ? 'stale' : 'failed';
+    toastError(err);
+  }
+  // 'stale' รู้จำนวน (ของรอบก่อน) จึงแสดงตัวเลข ส่วน loading/failed ไม่รู้จริง ๆ
+  document.getElementById('badge-count').textContent =
+    loadState === 'failed' ? UNKNOWN : allRecords.length;
+  return loadState;
+}
+
+/**
+ * retryLoad — ปุ่ม "ลองใหม่" ในแถวสถานะของตาราง
+ * ความล้มเหลวแบบนี้ส่วนใหญ่หายเองเมื่อลองซ้ำ ถ้าไม่มีปุ่มนี้ผู้ใช้ต้องเดาเองว่า
+ * ต้องสลับแท็บออกแล้วกลับเข้ามา
+ */
+async function retryLoad(){ await loadAll(); renderTable(); }
 
 /* ── Utilities ── */
 // สร้าง id สุ่มสำหรับโหมด LocalStorage: เวลา (base36) + เลขสุ่ม → เรียงตามเวลาได้และชนกันยากมาก
@@ -691,8 +778,10 @@ function showTab(id,el){
   document.getElementById(id).style.display='';
   document.querySelectorAll('.tbtn').forEach(b=>b.classList.remove('active'));
   if(el) el.classList.add('active');
-  if(id==='tab-list')      loadAll().then(renderTable);
-  if(id==='tab-dashboard') loadAll().then(renderDashboard);
+  // loadAll ไม่ throw แล้ว แต่ renderTable/renderDashboard throw เองได้
+  // ถ้าไม่ catch ที่นี่ ความล้มเหลวของการ "วาด" จะกลับไปเงียบเหมือนเดิม
+  if(id==='tab-list')      loadAll().then(renderTable).catch(toastError);
+  if(id==='tab-dashboard') loadAll().then(renderDashboard).catch(toastError);
 }
 
 /* ================================================================
@@ -1281,6 +1370,16 @@ document.getElementById('mainForm').addEventListener('submit',async e=>{
  * ================================================================ */
 
 /**
+ * byId — ลำดับเดิมของตาราง: id น้อย→มาก (เก่าก่อน)
+ * รองรับทั้ง id ตัวเลข (SQLite) และ _id string (LocalStorage ใช้เทียบ string แทน)
+ */
+function byId(a,b){
+  if(a.id!==undefined&&b.id!==undefined) return (Number(a.id)||0)-(Number(b.id)||0);
+  const ai=a._id||'', bi=b._id||'';
+  return ai<bi?-1:ai>bi?1:0;
+}
+
+/**
  * renderTable — วาดตารางรายการใหม่ทั้งก้อนจาก allRecords
  *
  * Pipeline: filter → sort → map เป็น HTML string → เซ็ต innerHTML ครั้งเดียว
@@ -1291,29 +1390,70 @@ document.getElementById('mainForm').addEventListener('submit',async e=>{
  * ชื่อ/นามสกุล/ตำแหน่ง/กลุ่มงาน/เลขที่/สำนัก — เจอฟิลด์ใดฟิลด์หนึ่งก็ผ่าน (OR)
  * ทำงานร่วมกับ filter สถานะแบบ AND
  *
- * การเรียง: id น้อย→มาก (เก่าก่อน) — รองรับทั้ง id ตัวเลข (SQLite) และ
- * _id string (LocalStorage ใช้เทียบ string แทน)
+ * การเรียง: ค่า default คือ id น้อย→มาก (เก่าก่อน) ตาม `byId` — เปลี่ยนเป็น
+ * เรียงตาม `p5_doc_received` ได้ด้วยช่อง `sort-by` ซึ่งมี `byId` เป็นตัวตัดสิน
+ * เมื่อวันที่เท่ากัน ข้อมูลจริงมักกรอกวันที่เดียวกันทั้งชุด ถ้าไม่มีตัวตัดสิน
+ * ลำดับแถวที่เสมอกันจะขึ้นกับ engine ของ Array.sort แล้วสลับไปกลับได้ผลไม่ซ้ำเดิม
+ *
+ * ช่อง `sort-by` กับ switch ของ `so` ข้างล่างเป็นกฎเดียวกันที่เขียนไว้สองที่
+ * `test_sort_options_match_the_comparator` คือตัวที่จับเวลาสองฝั่งหลุดจากกัน
  *
  * คะแนนเฉลี่ยต่อแถว: เฉลี่ยจากคะแนน 5.1 ที่ > 0 (ตัดแถวยังไม่กรอกทิ้ง)
  *
  * @returns {undefined} (side effect: อัปเดต tbody + ตัวนับ "แสดง x/y รายการ")
  */
+/**
+ * statusRow — แถวเดียวกินทุกคอลัมน์ ใช้กับทุกสภาวะที่ไม่มีแถวข้อมูลให้แสดง
+ * มีไว้เพราะของเดิมเซ็ต tbody เป็นสตริงว่างเมื่อไม่มีแถว ซึ่งอ่านไม่ออกว่า
+ * ว่างจริง กรองจนไม่เหลือ หรือโหลดไม่สำเร็จ — สามอย่างนี้ต้องเห็นต่างกัน
+ */
+function statusRow(icon,msg,retry){
+  return `<tr><td colspan="${TBL_COLS}" class="text-center text-muted py-4">
+    <i class="fa ${icon} me-2"></i>${esc(msg)}${retry?
+    `<button class="btn btn-sm btn-outline-primary ms-3" onclick="retryLoad()">`+
+    `<i class="fa fa-rotate-right me-1"></i>ลองใหม่</button>`:''}
+  </td></tr>`;
+}
+
 function renderTable(){
   const q=(document.getElementById('search-input').value||'').toLowerCase();
   const st=document.getElementById('filter-status').value;
+  const so=document.getElementById('sort-by').value;
   const f=allRecords.filter(r=>{
     const m=!q||[r.p1_fname,r.p1_lname,r.p2_pos_current,r.p2_dept,r.p2_empid,r.p2_sec]
                  .some(v=>(v||'').toLowerCase().includes(q));
     return m&&(!st||r.p5_work_result===st);
   }).sort((a,b)=>{
-    if(a.id!==undefined&&b.id!==undefined) return (Number(a.id)||0)-(Number(b.id)||0);
-    const ai=a._id||'', bi=b._id||'';
-    return ai<bi?-1:ai>bi?1:0;
+    // เทียบกับค่าที่รู้จักตรง ๆ ไม่ใช่ `if(so)` — option ใหม่ที่เพิ่มใน HTML
+    // แล้วลืมเพิ่มที่นี่จะตกมา byId (ไม่เรียงให้เห็นชัด ๆ) ดีกว่าถูกนับเป็น asc เงียบ ๆ
+    if(so==='doc_asc'||so==='doc_desc'){
+      // p5_doc_received เก็บเป็น YYYY-MM-DD จาก <input type="date"> เทียบ string
+      // ได้ตรงตามลำดับเวลา ไม่ต้อง parse
+      const ad=a.p5_doc_received||'', bd=b.p5_doc_received||'';
+      // แถวที่ยังไม่กรอกวันที่ลงท้ายเสมอทั้งสองทิศ — เทียบ string ดิบจะดัน
+      // ค่าว่างขึ้นบนสุดเวลาเรียงขึ้น ซึ่งเอาที่ว่างมาบังข้อมูลที่ตั้งใจดู
+      if(ad&&!bd) return -1;
+      if(!ad&&bd) return 1;
+      if(ad!==bd) return so==='doc_desc' ? (ad<bd?1:-1) : (ad<bd?-1:1);
+    }
+    return byId(a,b);
   });
-  document.getElementById('rec-shown').textContent=f.length;
-  document.getElementById('rec-total').textContent=allRecords.length;
+  // 'loading'/'failed' = ไม่รู้จำนวนจริง แสดง UNKNOWN ไม่ใช่ 0 — ทั้งสามจุด
+  // (badge-count อยู่ใน loadAll) ไม่ใช่เฉพาะจุดที่บั๊กเดิมแตะ
+  const known = loadState!=='loading' && loadState!=='failed';
+  document.getElementById('rec-shown').textContent = known ? f.length : UNKNOWN;
+  document.getElementById('rec-total').textContent = known ? allRecords.length : UNKNOWN;
+  const tb = document.getElementById('tbody');
+  if(loadState==='loading'){
+    tb.innerHTML = statusRow('fa-spinner','กำลังโหลดข้อมูล...',false); return;
+  }
+  if(loadState==='failed'){
+    // toast หายไปเองใน 2-3 วินาที แถวนี้คือสิ่งที่ยังอยู่ให้คนที่หันไปทำอะไรอื่น
+    // แล้วกลับมาเห็น — ถ้ามีแค่ toast สภาพที่ค้างอยู่คือตารางว่างไร้คำอธิบาย
+    tb.innerHTML = statusRow('fa-triangle-exclamation','โหลดข้อมูลไม่สำเร็จ',true); return;
+  }
   const WC={ผ่าน:'success',ไม่ผ่าน:'danger',รอผล:'warning',ขอแก้ไข:'info'};
-  document.getElementById('tbody').innerHTML=f.map((r,i)=>{
+  let body = f.map((r,i)=>{
     const rid=r._id||r.id;
     let avg='-';
     try{ const ev=JSON.parse(r.eval51_rows||'[]').map(x=>parseFloat(x.score)||0).filter(v=>v>0);
@@ -1326,12 +1466,23 @@ function renderTable(){
       <td>${esc(r.p2_dept)||'-'}</td><td>${esc(r.p2_sec)||'-'}</td>
       <td class="text-center fw-bold">${avg}</td>
       <td>${r.p5_work_result?`<span class="badge bg-${WC[r.p5_work_result]||'secondary'} bsm">${esc(r.p5_work_result)}</span>`:'-'}</td>
+      <td style="white-space:nowrap;font-size:.72rem">${esc(fmtDate(r.p5_doc_received))||'-'}</td>
       <td style="white-space:nowrap;font-size:.72rem">${esc(r._created||r.created)}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-sm btn-outline-primary me-1 py-0" onclick="editRec('${rid}')"><i class="fa fa-edit"></i></button>
         <button class="btn btn-sm btn-outline-danger py-0" onclick="delRec('${rid}')"><i class="fa fa-trash"></i></button>
       </td></tr>`;
   }).join('');
+  if(!body){
+    // ว่างเพราะกรอง กับ ว่างเพราะไม่มีข้อมูล เป็นคนละเรื่องและแก้คนละวิธี
+    body = allRecords.length
+      ? statusRow('fa-filter','ไม่พบรายการที่ตรงกับคำค้นหาหรือตัวกรองที่เลือก',false)
+      : statusRow('fa-inbox','ยังไม่มีข้อมูลในระบบ',false);
+  }
+  // 'stale' แสดงแถวจริงตามปกติ แต่ต้องติดป้ายว่าอาจเก่า ไม่ใช่ปล่อยให้เข้าใจว่าสด
+  tb.innerHTML = (loadState==='stale'
+    ? statusRow('fa-clock-rotate-left','ข้อมูลนี้เป็นของการโหลดครั้งก่อน — โหลดใหม่ไม่สำเร็จ',true)
+    : '') + body;
 }
 
 /**
@@ -1519,6 +1670,20 @@ function mkBar(id,labels,data,title,color='#1976D2'){
  * @returns {undefined} (side effect: อัปเดต stat cards + กราฟ 4 ตัว)
  */
 function renderDashboard(){
+  // การ์ดสรุปจะโชว์ "0 รายการ / อัตราผ่าน -" เมื่อโหลดไม่สำเร็จ ซึ่งเป็นคำโกหก
+  // เดียวกับที่ตารางเคยบอก ถ้าไม่รู้จำนวนจริงก็ต้องไม่สรุปอะไรออกมาเลย
+  if(loadState==='loading' || loadState==='failed'){
+    ['chart-result','chart-level','chart-sec','chart-score'].forEach(kc);
+    document.getElementById('stat-cards').innerHTML=
+      `<div class="col-12 text-center text-muted py-4">`+
+      `<i class="fa ${loadState==='failed'?'fa-triangle-exclamation':'fa-spinner'} me-2"></i>`+
+      `${loadState==='failed'?'โหลดข้อมูลไม่สำเร็จ จึงยังสรุปภาพรวมไม่ได้':'กำลังโหลดข้อมูล...'}`+
+      (loadState==='failed'?`<button class="btn btn-sm btn-outline-primary ms-3" `+
+        `onclick="loadAll().then(renderDashboard).catch(toastError)">`+
+        `<i class="fa fa-rotate-right me-1"></i>ลองใหม่</button>`:'')+
+      `</div>`;
+    return;
+  }
   const total=allRecords.length;
   const passed=allRecords.filter(r=>r.p5_work_result==='ผ่าน').length;
   let sum=0,cnt=0; const wc={},lc={},sc={};

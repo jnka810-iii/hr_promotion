@@ -791,6 +791,9 @@ def test_item22_window_opens_even_when_the_server_never_answers(monkeypatch):
     monkeypatch.setattr(hr, 'run_flask', lambda: time.sleep(5))
     monkeypatch.setattr(hr, '_setup_logging', lambda: None)
     monkeypatch.setattr(hr, 'init_db', lambda: None)
+    # ต้อง patch ด้วย ไม่งั้น main() จะสำรอง hr_promotion.db จริงลง backup/ ของ repo
+    # กฎเดียวกับ DB_PATH/UPLOAD_FOLDER: เทสต์ต้องไม่แตะไฟล์จริง
+    monkeypatch.setattr(hr, '_backup_db', lambda: None)
     monkeypatch.setattr(hr, '_wait_for_port', lambda *a, **kw: False)
 
     hr.main()
@@ -883,21 +886,21 @@ def test_item25_put_with_only_the_old_four_fields_is_rejected(client, make_recor
 
 def test_item25_full_record_is_accepted(client):
     assert client.post('/api/records', json=VALID_RECORD).status_code == 201
-def test_item25_error_message_stays_under_the_toast_limit(client):
-    """
-    ไล่ชื่อครบทั้ง 13 ช่องยาว 303 ตัวอักษร ซึ่งทะลุเพดาน 80 ของ toastError
-    = เปิด alert() ทับหน้าจอ รายชื่อเต็มจึงย้ายไปอยู่ใน `missing`
-    """
-    body = client.post('/api/records', json={}).get_json()
-    assert len(body['missing']) == len(hr.REQUIRED_FIELDS)
-    assert len(body['error']) < MAX_CLIENT_MESSAGE
-
-
-def test_item25_single_missing_field_is_named(client):
-    """ขาดช่องเดียวยังสั้นพอที่จะบอกชื่อช่องตรง ๆ ซึ่งมีประโยชน์กว่าบอกจำนวน"""
-    r = client.post('/api/records', json=dict(VALID_RECORD, p1_lname=''))
-    assert r.status_code == 422
-    assert r.get_json()['error'] == 'กรุณากรอกนามสกุล'
+def test_item25_error_message_stays_under_the_toast_limit(client):
+    """
+    ไล่ชื่อครบทั้ง 13 ช่องยาว 303 ตัวอักษร ซึ่งทะลุเพดาน 80 ของ toastError
+    = เปิด alert() ทับหน้าจอ รายชื่อเต็มจึงย้ายไปอยู่ใน `missing`
+    """
+    body = client.post('/api/records', json={}).get_json()
+    assert len(body['missing']) == len(hr.REQUIRED_FIELDS)
+    assert len(body['error']) < MAX_CLIENT_MESSAGE
+
+
+def test_item25_single_missing_field_is_named(client):
+    """ขาดช่องเดียวยังสั้นพอที่จะบอกชื่อช่องตรง ๆ ซึ่งมีประโยชน์กว่าบอกจำนวน"""
+    r = client.post('/api/records', json=dict(VALID_RECORD, p1_lname=''))
+    assert r.status_code == 422
+    assert r.get_json()['error'] == 'กรุณากรอกนามสกุล'
     assert len(r.get_json()['error']) < MAX_CLIENT_MESSAGE
 # ────────────────────────────────────────────────
 # ข้อ 8 — migration ที่ล้มกลางทางต้องไม่ทิ้งไฟล์กำพร้าไว้
@@ -1010,3 +1013,71 @@ def test_item8_rerun_after_a_failure_writes_one_file_per_row(hr_app, db, uploads
     con.close()
     assert sorted(r['stored_name'] for r in rows) == sorted(files)
 
+
+# ────────────────────────────────────────────────
+# ช่องเรียงลำดับตามวันที่ได้รับเอกสารเล่มสมบูรณ์
+# ────────────────────────────────────────────────
+
+def _sort_select_options():
+    """คู่ (value, ป้ายที่ผู้ใช้เห็น) ของทุก option ในช่อง `sort-by` ตามลำดับใน markup"""
+    src = _template_source()
+    m = re.search(r'<select[^>]*id="sort-by"[^>]*>(.*?)</select>', src, re.S)
+    assert m, 'แท็บรายการทั้งหมดไม่มีช่องเรียงลำดับ'
+    return re.findall(r'<option value="([^"]*)">([^<]*)</option>', m.group(1))
+
+
+def test_sort_options_match_the_comparator():
+    """
+    ช่อง `sort-by` กับ comparator ใน `renderTable` เป็นกฎเดียวกันที่เขียนไว้สองที่
+    เพิ่ม option ใน HTML แล้วลืมเพิ่ม branch ใน JS = ตัวเลือกที่เลือกได้แต่ไม่ทำอะไร
+    และผู้ใช้ไม่มีทางรู้ว่ามันเสียหรือข้อมูลเรียงมาแบบนั้นจริง ๆ
+
+    comparator ไม่มีอะไรรันมันได้ (โปรเจกต์นี้ไม่มี JS test runner) จึงเทียบ
+    ที่ตัวหนังสือในซอร์ส: ค่าที่ dropdown เสนอ ต้องเท่ากับค่าที่ comparator รู้จัก
+    """
+    src = _template_source()
+    offered = {v for v, _label in _sort_select_options() if v}
+    recognised = set(re.findall(r"so===\'([^\']+)\'", src))
+    assert offered == recognised
+
+
+def test_sort_defaults_to_the_original_row_order():
+    """
+    option แรกต้องเป็น value ว่าง เพราะ `<select>` เลือกตัวแรกเองเมื่อไม่มี `selected`
+    ค่าว่างคือ branch ที่ตกไป `byId` = ลำดับเดิมของตาราง คนที่ไม่ได้ขอให้เรียงใหม่
+    จึงเห็นตารางเหมือนเดิมเป๊ะ ถ้าสลับให้ doc_asc มาก่อน ลำดับเริ่มต้นของทุกคนเปลี่ยน
+    """
+    options = _sort_select_options()
+    assert options[0][0] == ''
+
+
+def test_sorted_column_is_visible_in_the_table():
+    """
+    เรียงตามค่าที่ตารางไม่ได้โชว์ = ผู้ใช้เห็นแถวสลับที่โดยไม่มีคอลัมน์ไหนอธิบายว่าทำไม
+    แยกไม่ออกจากการเรียงพัง คอลัมน์นี้จึงเป็นส่วนหนึ่งของฟีเจอร์ ไม่ใช่ของแถม
+    """
+    src = _template_source()
+    assert 'fmtDate(r.p5_doc_received)' in src
+
+
+def test_sort_puts_rows_without_a_date_last_in_both_directions():
+    """
+    `p5_doc_received` ไม่ใช่ฟิลด์บังคับ แถวที่ยังไม่กรอกจึงมีจริง ถ้าเทียบ string ดิบ
+    ค่าว่างจะขึ้นบนสุดเวลาเรียงเก่า→ใหม่ เอาที่ว่างมาบังข้อมูลที่ผู้ใช้ตั้งใจดู
+    ด่านค่าว่างต้องมาก่อนการเทียบวันที่ ไม่ใช่หลัง
+    """
+    src = _template_source()
+    empty_first = src.index('if(ad&&!bd) return -1;')
+    compare = src.index("if(ad!==bd) return so===")
+    assert empty_first < compare
+
+
+def test_sort_falls_back_to_the_original_order_on_a_tie():
+    """
+    ข้อมูลจริงกรอกวันที่รับเอกสารเป็นวันเดียวกันทั้งชุดได้ตามปกติ เสมอกันจึงเป็น
+    เคสปกติไม่ใช่เคสขอบ ถ้าไม่มีตัวตัดสิน ลำดับแถวที่เสมอกันขึ้นกับ engine ของ
+    Array.sort แล้วสลับการเรียงไปกลับได้ลำดับไม่ซ้ำเดิม
+    """
+    src = _template_source()
+    assert 'return byId(a,b);' in src
+    assert src.index("if(ad!==bd) return so===") < src.index('return byId(a,b);')

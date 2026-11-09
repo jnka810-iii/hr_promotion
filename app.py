@@ -56,6 +56,9 @@ log = logging.getLogger('hr_promotion')
 BASE_DIR      = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
 DB_PATH       = os.path.join(BASE_DIR, 'hr_promotion.db')
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
+# สำเนาสำรองรายวันของ DB — อยู่ข้างตัวโปรแกรม ไม่ผ่าน git (ดู _backup_db)
+BACKUP_DIR    = os.path.join(BASE_DIR, 'backup')
+BACKUP_KEEP   = 14
 
 
 # ────────────────────────────────────────────────
@@ -1228,6 +1231,68 @@ def export_csv_server():
 
 PORT = 5000
 
+def _backup_db():
+    """
+    คัดลอก DB เป็นสำเนาสำรองรายวันไว้ที่ BACKUP_DIR/hr_promotion-YYYYMMDD.db
+
+    ทำไมต้องมี: ไฟล์ DB เคยถูก track ไว้ใน git ทุกครั้งที่ `git checkout` หรือสลับสาขา
+    ข้อมูลจริงจึงถูกเขียนทับด้วยเวอร์ชันที่ commit ไว้ ขณะที่ `static/uploads/*.pdf`
+    ถูก ignore ไว้จึงรอด ผลคือไฟล์ PDF กำพร้าสะสมโดยไม่มีแถวไหนชี้ถึง
+    เอา DB ออกจาก git แล้วก็ยังไม่พอ เพราะ commit เก่าทุกตัวยังมีไฟล์นี้อยู่ใน tree
+    การ checkout ย้อนไปที่ commit เหล่านั้นจะเขียนทับอีก สำเนาสำรองคือชั้นที่รอด
+    เหตุการณ์นั้น และมันต้องไม่อยู่ใน git เพราะ git คือต้นเหตุ
+
+    ใช้ `sqlite3.Connection.backup()` ไม่ใช่ `shutil.copy` — การคัดลอกไฟล์ของ DB
+    ที่เปิดอยู่ในโหมด WAL ได้สำเนาที่ไม่สอดคล้องกับ -wal ซึ่งเป็นวิธีทำข้อมูลพังที่
+    มองไม่ออกจนสาย ส่วน backup() ทำงานผ่าน SQLite เองจึงได้ snapshot ที่ consistent
+
+    ไฟล์ละวัน: ถ้าของวันนี้มีแล้วไม่เขียนทับ สำเนาแรกของวันจึงเป็นสภาพ "ก่อนถูกแตะ"
+    ของวันนั้น ซึ่งเป็นสภาพที่มีค่าที่สุดเวลาต้องกู้
+
+    ความล้มเหลวที่นี่ต้องไม่ทำให้โปรแกรมเปิดไม่ขึ้น — บันทึก log แล้วไปต่อ
+    การสำรองไม่ได้ยังดีกว่าผู้ใช้เปิดโปรแกรมทำงานไม่ได้
+
+    Returns:
+        str | None: path ของสำเนาที่เขียน, None เมื่อข้ามหรือล้มเหลว
+    """
+    if not os.path.exists(DB_PATH):
+        return None                                  # ยังไม่มี DB ไม่มีอะไรให้สำรอง
+    try:
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        dest = os.path.join(BACKUP_DIR,
+                            'hr_promotion-%s.db' % datetime.now().strftime('%Y%m%d'))
+        if os.path.exists(dest):
+            return dest                              # ของวันนี้มีแล้ว ไม่เขียนทับ
+        with closing(sqlite3.connect(DB_PATH)) as src:
+            with closing(sqlite3.connect(dest)) as dst:
+                src.backup(dst)
+                # สำเนาสืบทอดโหมด WAL จากต้นฉบับ แล้วทิ้ง -shm/-wal ไว้ข้างทุกไฟล์
+                # สำเนาสำรองต้องเป็นไฟล์เดียวที่คัดลอกไปไหนก็ครบ ไม่ใช่สามไฟล์ที่ต้องไปด้วยกัน
+                dst.execute('PRAGMA journal_mode=DELETE')
+        _prune_backups()
+        log.info('สำรอง DB ไว้ที่ %s', dest)
+        return dest
+    except Exception:
+        log.exception('สำรอง DB ไม่สำเร็จ')
+        return None
+
+
+def _prune_backups():
+    """
+    เก็บสำเนาสำรองไว้ BACKUP_KEEP ไฟล์ล่าสุด ลบที่เก่ากว่านั้น
+
+    เรียงตามชื่อไฟล์ได้เพราะรูปแบบเป็น YYYYMMDD ซึ่งลำดับตัวอักษรตรงกับลำดับเวลา
+    ไม่ใช้ mtime เพราะการคัดลอกโฟลเดอร์หรือกู้คืนไฟล์ทำให้ mtime เปลี่ยนได้
+    """
+    try:
+        names = sorted(n for n in os.listdir(BACKUP_DIR)
+                       if n.startswith('hr_promotion-') and n.endswith('.db'))
+        for n in names[:-BACKUP_KEEP] if len(names) > BACKUP_KEEP else []:
+            _safe_remove(os.path.join(BACKUP_DIR, n))
+    except Exception:
+        log.exception('ลบสำเนาสำรองเก่าไม่สำเร็จ')
+
+
 def _setup_logging():
     """
     ตั้ง log ไฟล์ไว้ข้างตัวโปรแกรม (BASE_DIR/hr_promotion.log) หมุนไฟล์ที่ 1 MB เก็บ 3 รุ่น
@@ -1320,6 +1385,9 @@ def main():
         None
     """
     _setup_logging()
+    # สำรองก่อน init_db() เสมอ — init_db() มี migration ที่แก้ข้อมูล
+    # (_dedupe_attachment_slots ลบไฟล์ที่ถูกแทนที่ด้วย) สำเนาจึงต้องเป็นสภาพก่อนนั้น
+    _backup_db()
     init_db()
     if HAS_WEBVIEW:
         t = threading.Thread(target=run_flask, daemon=True)

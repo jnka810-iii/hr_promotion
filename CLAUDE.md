@@ -13,11 +13,27 @@ python app.py        # pywebview window (or browser fallback on http://127.0.0.1
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest     # 104 tests, ~2.7s
+python -m pytest                      # 118 tests, ~3s    — backend
+node --test tests/client.test.mjs     # 14 tests, ~0.3s   — frontend
 ```
 
+Two commands, both must pass. `node --test tests/` does **not** work on this platform (node reads
+the directory as a module) — name the file. No `package.json` and no JS dependency: the frontend
+suite runs on `node --test` built into node 22 plus a hand-rolled DOM in
+[tests/client_harness.mjs](tests/client_harness.mjs). Do not add jest/vitest/jsdom for it.
+
+The harness reads the live `<script>` out of [templates/index.html](templates/index.html) and
+imports it as a module, so it tests the shipped code, not a copy. Two things it has to keep doing:
+it asserts every name it pulls out still exists (rename one and you get a named error, not a suite
+that silently tests nothing), and it appends a unique comment per load to bust node's module cache
+— data: URL imports are cached by specifier, so without it every test shares one module instance
+and `allRecords` / `loadState` leak across tests while the suite still reports green.
+
 Tests monkeypatch `DB_PATH` + `UPLOAD_FOLDER` to pytest's `tmp_path` — they must never touch
-`hr_promotion.db` or `static/uploads/`. The `fail_sql` fixture deliberately avoids `monkeypatch`
+`hr_promotion.db` or `static/uploads/`. A test that calls `main()` must also patch `_backup_db`
+(or `BACKUP_DIR`, as the `backup_app` fixture in [tests/test_backup.py](tests/test_backup.py)
+does): `main()` backs the DB up, so an unpatched one snapshots the **real** database into the
+repo's `backup/`. Same rule, one more path. The `fail_sql` fixture deliberately avoids `monkeypatch`
 (its `undo()` would restore the real paths mid-test). That injector also records `close()`, so
 `fail_sql.unclosed()` reports connections a route opened and never closed. That is what pins the
 connection invariant under Architecture across all 14 routes, instead of eyeballing each site.
@@ -34,8 +50,12 @@ Single-file backend: [app.py](app.py)
 
 | Concern | Detail |
 |---|---|
+| DB file | `hr_promotion.db` next to the program is the **only** real store, and it is **not tracked by git**. It used to be: every `git checkout` / branch switch / `git stash` then overwrote real data with the committed version — only two commits ever held it, both April 2026, both carrying the same 4 trial records. That is what "the app only ever shows test data, and it keeps coming back" was. `.gitignore` already listed `*.db`, which does nothing for an already-tracked file. **Never `git add -f` it** — `test_db_file_is_not_tracked_by_git` is the guard. The giveaway was asymmetry: `static/uploads/*.pdf` is ignored so files survived every checkout while the `attachments` rows pointing at them did not, leaving 54 orphan PDFs (617 MB) against 0 rows. Removing it from the index does **not** close the hole — every old commit and every branch still carries the file, so checking one out clobbers the live data again. Rationale: [docs/adr/0002](docs/adr/0002-live-database-stays-out-of-version-control.md) |
+| Backup | `backup/hr_promotion-YYYYMMDD.db`, one per day, `BACKUP_KEEP` = 14, written by `_backup_db()` from `main()` **before** `init_db()` — `init_db()` runs migrations that change data and `_dedupe_attachment_slots` deletes displaced files, so the snapshot has to predate it. Uses `sqlite3.Connection.backup()`, never `shutil.copy`: copying a live WAL database file gives an inconsistent snapshot. Sets `journal_mode=DELETE` on the copy so each backup is one self-contained file rather than three that must travel together. First snapshot of the day wins — re-running never overwrites, otherwise launching the app after data was wiped would overwrite a good snapshot with an empty one. Backup failure never blocks startup. `backup/` is gitignored: git is the reason this exists |
 | DB | `hr_promotion.db` — WAL mode, foreign_keys ON, fresh connection per request. **Invariant:** every `get_db()` call site closes deterministically. Read paths use `with closing(get_db()) as con:`; write paths use `try/except/finally: con.close()` because they also need rollback. A bare `con.close()` after `execute()` is skipped when the query raises, which leaks an OS handle on the DB file until a GC pass |
 | File storage | `static/uploads/<uuid>.pdf` — no BLOBs in DB. **Invariant:** every disk delete happens *after* `con.commit()` (read `stored_name` first, delete later). Deleting before commit means a rollback leaves a row pointing at a missing file — worse than an orphan file |
+| Data load state | `allRecords` alone cannot say whether `0` means empty or unknown, so `loadState` carries it: `loading` / `loaded` / `stale` / `failed`. **Invariant:** `0` reaches the screen only in `loaded`; `loading` and `failed` show `UNKNOWN` at all three counters (`badge-count`, `rec-shown`, `rec-total`). The three used to read `0` for every one of those states, which is how "the app shows 0 records" was indistinguishable from "there are no records". `loadAll()` **never throws** — it catches once, toasts, and returns `loadState`; its 7 call sites previously had zero catches between them, so the server's Thai error message died in an unhandled rejection. See [GLOSSARY.md](GLOSSARY.md) |
+| Offline fallback | LocalStorage mode is entered **only when there is no backend** (`fetch` rejects, so the error carries no `httpStatus`). A `5xx` means the backend exists and its data is intact: stay in Flask mode, amber light, report the error. Switching to an empty LocalStorage on a `500` answers from the wrong store and reports `0 รายการ` while SQLite holds the rows. `apiFetch` tags `e.httpStatus` purely so these two can be told apart — do not collapse `detectMode`'s two `catch` branches back into one. Rationale: [docs/adr/0001](docs/adr/0001-fallback-only-when-there-is-no-backend.md) |
 | Frontend libs | `static/vendor/` — Bootstrap, Chart.js, Font Awesome, Sarabun are **self-hosted**. Never move them back to a CDN: this ships as an offline `.exe`. PyInstaller must `--add-data "static/vendor;static/vendor"` |
 | Upload method | Frontend sends `multipart/form-data` (field `file` + `book_no`); the route also still accepts base64-in-JSON for curl (`MAX_CONTENT_LENGTH` = 110 MB) |
 | CSV export | `mimetype` must carry **no** parameter. Werkzeug appends its own `charset`, so `mimetype='text/csv; charset=X'` ships two of them and the client reads the first. The UTF-8 BOM, not the header, is what makes Excel read Thai. Every cell goes through `csv_cell()`; `exportAllCSV` in the template holds the twin rule and the two must change together |

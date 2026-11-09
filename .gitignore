@@ -1,10 +1,15 @@
 # ไฟล์ PDF ที่ผู้ใช้อัปโหลด — ห้าม commit ขึ้น git
 static/uploads/*.pdf
 
-# Database
+# Database — ไฟล์ข้อมูลจริง ห้าม track
+# เคย track ไว้ ทำให้ทุก git checkout / สลับสาขา เขียนข้อมูลจริงทับด้วยเวอร์ชันใน commit
+# ขณะที่ static/uploads/*.pdf ถูก ignore จึงรอด ผลคือมี PDF กำพร้าสะสม
 *.db
 *.db-shm
 *.db-wal
+
+# สำเนาสำรองรายวันของ DB (_backup_db) — git คือต้นเหตุที่ต้องมีมัน จึงต้องไม่อยู่ใน git
+backup/
 
 # Test artifacts
 .pytest_cache/

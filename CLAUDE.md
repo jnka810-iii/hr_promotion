@@ -44,6 +44,23 @@ fix lands and the marker has to be removed, instead of a `skip` that rots silent
 Runtime deps are pinned `==` in [requirements.txt](requirements.txt) — a floating Flask is what
 silently killed `JSON_AS_ASCII`. Keep pytest out of it; it belongs in `requirements-dev.txt`.
 
+## Health check
+
+```bash
+python check_health.py    # exit 0 = all clear, 1 = something to fix
+```
+
+Read-only (every connection uses `mode=ro`), so it runs with the app open. It checks the **real**
+installation, which pytest cannot: pytest points `DB_PATH` at `tmp_path` and must never touch the
+live files. Distinct from [check_db.py](check_db.py), which inspects schema and writes
+`PRAGMA journal_mode` to the live DB.
+
+It verifies live-DB integrity, that no ref's history carries the DB file, that `.gitignore` covers
+it, and that backups are readable and not in WAL mode. The load-bearing number is the orphan count:
+uploaded PDFs with no `attachments` row pointing at them. That is how far the DB has drifted from
+disk, and it is the number that exposed the git-tracking bug in the first place. It currently
+reports 54 orphans (617 MB) left over from that bug, so the script exits 1 until those are resolved.
+
 ## Architecture
 
 Single-file backend: [app.py](app.py)

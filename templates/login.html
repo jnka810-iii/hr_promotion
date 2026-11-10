@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>เข้าสู่ระบบ — ระบบบันทึกข้อมูลบุคคลและประเมินผลงาน</title>
+<link rel="icon" href="data:,">
+<!-- ประตูหน้าบ้านตั้งใจไม่โหลด JavaScript ของแอปเลย ไม่มี apiFetch ไม่มี Chart.js
+     ไม่มีสคริปต์ของ index.html: ฟอร์มนี้เป็น form POST ธรรมดาที่ทำงานได้แม้สคริปต์
+     ในหน้าหลักจะพังทั้งไฟล์ และถ้าหน้านี้ยิง /api/* เองมันจะได้ 401 กองหนึ่งก่อนที่
+     ใครจะได้พิมพ์อะไร ซึ่งจะไปหลอก detectMode() ให้ตัดสินโหมดจากความพังนั้น
+     โหลดแค่ฟอนต์กับ Bootstrap เพื่อให้หน้าตาเป็นระบบเดียวกับหน้าหลัก -->
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/sarabun.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}">
+<style>
+:root{--pr:#1976D2;--pr2:#1565C0;--ac:#c8a951;--bg:#F5F5F5}
+*{box-sizing:border-box}
+body{background:var(--bg);font-family:'Sarabun','Segoe UI',sans-serif;font-size:15px;margin:0;
+     min-height:100vh;display:flex;flex-direction:column}
+.hdr{background:linear-gradient(135deg,#1565C0,#1976D2);color:#fff;padding:14px 24px 10px;
+     border-bottom:4px solid var(--ac);box-shadow:0 2px 12px rgba(0,0,0,.2)}
+.hdr h4{font-size:1.05rem;margin:0;font-weight:700}
+.hdr small{font-size:.78rem;opacity:.8}
+.wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:28px 16px}
+.card2{background:#fff;border:1px solid #dde3ef;border-radius:10px;width:100%;max-width:420px;
+       box-shadow:0 6px 24px rgba(25,118,210,.10);overflow:hidden}
+.card2 .top{background:linear-gradient(90deg,var(--pr),var(--pr2));color:#fff;padding:10px 18px;
+            font-weight:700;font-size:.95rem;letter-spacing:.3px}
+.card2 .body{padding:20px 22px 18px}
+label{font-size:.85rem;font-weight:600;color:#444;margin-bottom:4px;display:block}
+.form-control{font-family:'Sarabun',sans-serif;font-size:.95rem}
+.btn-pr{background:linear-gradient(90deg,var(--pr),var(--pr2));border:none;color:#fff;
+        font-weight:700;padding:9px 0;width:100%;border-radius:7px;font-family:'Sarabun',sans-serif}
+.btn-pr:hover{filter:brightness(1.08)}
+.hint{font-size:.78rem;color:#777;margin-top:14px;line-height:1.5}
+.alert{font-size:.88rem;padding:9px 12px;border-radius:7px}
+.setup{font-size:.84rem;background:#FFF8E1;border:1px solid #ffe08a;border-radius:7px;
+       padding:10px 12px;margin-bottom:14px;line-height:1.6}
+.setup code{background:#fff;border:1px solid #e8d79a;border-radius:4px;padding:1px 6px;
+            color:#8a6d1f;font-size:.82rem;display:inline-block;margin-top:4px}
+.foot{text-align:center;font-size:.76rem;color:#999;padding:0 0 18px}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <h4>ระบบบันทึกข้อมูลบุคคลและประเมินผลงานเพื่อเลื่อนระดับตำแหน่ง</h4>
+  <small>Human Resource Management System</small>
+</div>
+
+<div class="wrap">
+  <div class="card2">
+    <div class="top">
+      {% if mode == 'change' %}เปลี่ยนรหัสผ่าน{% else %}เข้าสู่ระบบ{% endif %}
+    </div>
+    <div class="body">
+
+      {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+      {% if ok %}<div class="alert alert-success">{{ ok }}</div>{% endif %}
+
+      {% if mode == 'change' %}
+        {# ต้องกรอกรหัสเดิมด้วย ไม่งั้นคนที่นั่งหน้าเครื่องที่เปิดค้างไว้ยึดบัญชีได้ทันที #}
+        <form method="post" action="{{ url_for('change_password') }}" autocomplete="off">
+          <div class="mb-3">
+            <label for="current">รหัสผ่านเดิม</label>
+            <input class="form-control" type="password" id="current" name="current"
+                   autocomplete="current-password" required autofocus>
+          </div>
+          <div class="mb-3">
+            <label for="new1">รหัสผ่านใหม่</label>
+            <input class="form-control" type="password" id="new1" name="new1"
+                   autocomplete="new-password" minlength="8" required>
+          </div>
+          <div class="mb-3">
+            <label for="new2">พิมพ์รหัสผ่านใหม่อีกครั้ง</label>
+            <input class="form-control" type="password" id="new2" name="new2"
+                   autocomplete="new-password" minlength="8" required>
+          </div>
+          <button class="btn-pr" type="submit">บันทึกรหัสผ่านใหม่</button>
+        </form>
+        <div class="hint">
+          รหัสผ่านต้องยาวอย่างน้อย 8 ตัวอักษร<br>
+          เมื่อเปลี่ยนแล้ว เครื่องอื่นที่ค้างล็อกอินด้วยบัญชีนี้จะถูกไล่ออกทั้งหมด
+          เหลือเฉพาะเครื่องนี้<br>
+          <a href="{{ url_for('index') }}">&larr; กลับไปหน้าระบบ</a>
+        </div>
+
+      {% else %}
+        {% if no_users %}
+          {# ตาราง users ว่าง = ยังไม่มีใครเข้าได้เลย ไม่ใช่ = ไม่ต้องล็อกอิน
+             หน้านี้จึงบอกคำสั่งที่ต้องไปรันที่เครื่องเซิร์ฟเวอร์ ไม่มีปุ่มสร้างบัญชีให้ #}
+          <div class="setup">
+            <b>ยังไม่มีบัญชีผู้ใช้ในระบบ</b><br>
+            สร้างบัญชีผู้ดูแลคนแรกที่เครื่องเซิร์ฟเวอร์ด้วยคำสั่ง
+            <code>python manage_users.py add &lt;ชื่อผู้ใช้&gt; --role admin</code>
+          </div>
+        {% endif %}
+        <form method="post" action="{{ url_for('login') }}">
+          <input type="hidden" name="next" value="{{ next }}">
+          <div class="mb-3">
+            <label for="username">ชื่อผู้ใช้</label>
+            <input class="form-control" type="text" id="username" name="username"
+                   value="{{ username }}" autocomplete="username" required autofocus>
+          </div>
+          <div class="mb-3">
+            <label for="password">รหัสผ่าน</label>
+            <input class="form-control" type="password" id="password" name="password"
+                   autocomplete="current-password" required>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="remember" name="remember" value="1">
+            <label class="form-check-label" for="remember" style="font-weight:500">
+              จำฉันไว้ในเครื่องนี้ 30 วัน
+            </label>
+          </div>
+          <button class="btn-pr" type="submit">เข้าสู่ระบบ</button>
+        </form>
+        <div class="hint">{{ lock_hint }}</div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+
+<div class="foot">บัญชีผู้ใช้สร้างและแก้ได้ที่เครื่องเซิร์ฟเวอร์เท่านั้น</div>
+
+</body>
+</html>

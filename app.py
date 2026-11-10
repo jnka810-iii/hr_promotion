@@ -11,7 +11,7 @@ from contextlib import closing
 from datetime import datetime, timedelta
 from functools import wraps
 from logging.handlers import RotatingFileHandler
-from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for
+from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for, g, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # pywebview เป็น optional dependency: มี = เปิดเป็นหน้าต่าง desktop,
@@ -1118,6 +1118,352 @@ def required_error(missing: list):
 
 
 # ────────────────────────────────────────────────
+# Routes — เข้าสู่ระบบ
+#
+# ด่านตรวจเป็น before_request ไม่ใช่ decorator ติดทีละ route โดยตั้งใจ: decorator
+# ที่ลืมติดทำให้ route ใหม่ "เปิด" โดยไม่มีอะไรส่งเสียง ส่วน before_request ทำให้
+# route ใหม่ "ปิด" เป็นค่าเริ่มต้น คนที่อยากเปิดต้องมาเติมชื่อใน PUBLIC_ENDPOINTS
+# ซึ่งเป็นการกระทำที่เห็นได้ใน diff
+# ────────────────────────────────────────────────
+
+# endpoint ที่เข้าได้โดยไม่ต้องล็อกอิน — สั้นที่สุดเท่าที่หน้าล็อกอินต้องใช้
+# 'static' อยู่ในนี้เพราะหน้าล็อกอินต้องโหลด Bootstrap กับฟอนต์จาก static/vendor
+# แต่ static/uploads/ ถูกกันไว้ใน require_login (ดูเหตุผลที่นั่น)
+PUBLIC_ENDPOINTS = frozenset({'login', 'static'})
+
+# ข้อความเดียวสำหรับทุกสาเหตุที่ล็อกอินไม่ผ่าน — ไม่มีอยู่จริง รหัสผิด บัญชีถูกปิด
+# หรือถูกล็อกชั่วคราว ตอบเหมือนกันหมด ไม่งั้นหน้าล็อกอินจะกลายเป็นเครื่องมือไล่ถาม
+# ว่าในระบบมีใครอยู่ (สาเหตุจริงไปอยู่ใน log)
+LOGIN_FAILED_MSG = 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'
+# ข้อความที่ /api/* ได้รับเมื่อยังไม่ล็อกอิน — ต้องสั้นกว่า 80 ตัวอักษร ไม่งั้น
+# toastError ฝั่ง client จะยกระดับเป็น alert() ที่ต้องกดปิด
+UNAUTHORIZED_MSG = 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง'
+FORBIDDEN_MSG    = 'ต้องเป็นผู้ดูแลระบบจึงจะทำรายการนี้ได้'
+
+
+def audit(action: str, detail: str = ''):
+    """
+    เขียนหนึ่งบรรทัดลง log ว่าใครทำอะไร
+
+    ไม่มีตาราง audit ใน DB โดยตั้งใจ: ตารางที่ไม่มีหน้าจอให้ดูคือตารางที่ไม่มีใครอ่าน
+    และมันจะมาพร้อมคำถามที่ยังไม่มีคำตอบ (ใครดูได้ ลบได้ไหม สำรองยังไง) ส่วนไฟล์ log
+    มี RotatingFileHandler ต่ออยู่แล้วและเป็นที่เดียวที่เก็บรายละเอียดที่ client
+    ไม่ได้เห็นอีกต่อไป ข้อจำกัดที่ยอมรับ: หมุนทิ้งเมื่อครบ 1 MB × 3
+
+    Parameters:
+        action (str): สิ่งที่เกิดขึ้น เช่น 'delete_record'
+        detail (str): รายละเอียดเพิ่ม เช่น 'id=17'
+
+    Returns:
+        None
+    """
+    who = g.user['username'] if getattr(g, 'user', None) else '-'
+    log.info('audit user=%s %s %s', who, action, detail)
+
+
+def _set_session_cookie(resp, token: str, remember):
+    """
+    ใส่ cookie เซสชันลงใน response
+
+    httponly: JavaScript อ่าน cookie นี้ไม่ได้ ถ้ามีช่อง XSS หลุดเข้ามาในหน้า
+    อย่างน้อย token ก็ไม่ถูกอ่านออกไปด้วยสคริปต์
+
+    samesite='Lax': เบราว์เซอร์จะไม่แนบ cookie นี้ไปกับ request ข้ามเว็บที่เป็น POST
+    เลย ซึ่ง **เป็นเกราะ CSRF ตัวเดียวที่ระบบนี้มี** — ห้ามแก้เป็น 'None' เด็ดขาด
+    ช่องที่โดนได้จริงถ้าแก้คือ POST อัปโหลดไฟล์แบบ multipart (เว็บอื่นสั่งเบราว์เซอร์
+    ของคนในสำนักงานยิงมาได้โดยไม่ต้องขออนุญาตก่อน) ส่วน PUT/DELETE และ POST ที่เป็น
+    application/json ถูกกฎ preflight ของเบราว์เซอร์กันไว้อีกชั้น
+
+    ไม่ตั้ง secure=True เพราะระบบนี้วิ่งบน HTTP เปล่าในวง LAN (ดู docs/adr/0004) —
+    ถ้าตั้ง เบราว์เซอร์จะไม่ส่ง cookie เลยและล็อกอินจะไม่ติดทั้งระบบ วันที่ย้ายไป
+    HTTPS ต้องกลับมาตั้งที่นี่
+
+    Parameters:
+        resp: Flask response object
+        token (str): token จาก start_session()
+        remember: ติ๊ก "จำฉันไว้" หรือไม่
+
+    Returns:
+        None
+    """
+    window = session_window(remember)
+    resp.set_cookie(SESSION_COOKIE, token,
+                    max_age=int(timedelta(**window).total_seconds()),
+                    httponly=True, samesite='Lax', secure=False, path='/')
+
+
+def _safe_next(target) -> str:
+    """
+    กรองค่า ?next= ให้เป็นเส้นทางภายในเว็บนี้เท่านั้น
+
+    ถ้าไม่กรอง หน้าล็อกอินของเราจะพาคนไปเว็บอื่นได้ตามที่ลิงก์สั่ง (open redirect)
+    ซึ่งใช้หลอกคนว่า "ลิงก์นี้เริ่มจากระบบ HR จริง ๆ" ได้ '//' ถูกปฏิเสธเพราะเป็น
+    URL ที่ยืมสคีมของหน้าปัจจุบัน (`//example.com` = `http://example.com`) และ
+    backslash ถูกปฏิเสธเพราะบางเบราว์เซอร์แปลงเป็น '/' ก่อนตีความ
+
+    Parameters:
+        target: ค่าที่รับมาจาก query string หรือฟอร์ม
+
+    Returns:
+        str: เส้นทางที่ปลอดภัย ไม่ผ่านการกรองคืน '/'
+    """
+    t = str(target or '')
+    if t.startswith('/') and not t.startswith('//') and '\\' not in t:
+        return t
+    return '/'
+
+
+def _render_login(mode: str = 'login', error: str = '', ok: str = '', username: str = ''):
+    """
+    วาดหน้าประตูหน้าบ้าน (ฟอร์มล็อกอิน และฟอร์มเปลี่ยนรหัสผ่าน)
+
+    ทั้งสองฟอร์มอยู่ใน template เดียวเพราะเป็นหน้าเดียวกันในสายตาผู้ใช้ และทั้งคู่
+    ต้องไม่โหลด JavaScript ของแอปเลย
+
+    Parameters:
+        mode (str): 'login' หรือ 'change'
+        error (str): ข้อความแดง
+        ok (str): ข้อความเขียว
+        username (str): ค่าที่กรอกไว้ ใส่กลับไปให้ไม่ต้องพิมพ์ใหม่
+
+    Returns:
+        str: HTML ของ templates/login.html
+    """
+    return render_template(
+        'login.html', mode=mode, error=error, ok=ok, username=username,
+        next=_safe_next(request.values.get('next')),
+        lock_hint=f'กรอกผิด {LOGIN_MAX_FAILS} ครั้งติดกัน บัญชีจะถูกล็อก '
+                  f'{LOGIN_LOCK_MINUTES} นาที',
+        no_users=getattr(g, 'no_users', False),
+        current_user=g.user['username'] if getattr(g, 'user', None) else '')
+
+
+@app.before_request
+def require_login():
+    """
+    ด่านตรวจของทุก request — ไม่มีเครื่องใดได้รับการยกเว้น
+
+    ไม่มีข้อยกเว้นให้ loopback: การเขียน `if request.remote_addr in LOOPBACK_HOSTS:
+    ผ่านเลย` ดูเหมือนความสะดวกของเครื่องเจ้าของ แต่วันที่ระบบนี้ไปอยู่หลัง reverse
+    proxy remote_addr จะกลายเป็น 127.0.0.1 ของทุกคนพร้อมกัน และประตูจะเปิดหมดโดยไม่มี
+    อะไรส่งเสียง ความสะดวกแก้ด้วย "จำฉันไว้ 30 วัน" ไม่ใช่ด้วยการเจาะรู
+
+    ไม่มีข้อยกเว้นให้ตาราง users ที่ว่างเปล่าด้วย: ถ้า "ยังไม่มีบัญชี" แปลว่า
+    "ยังไม่ต้องล็อกอิน" ประตูจะเปิดทุกครั้งที่ตารางว่าง รวมถึงตอน restore backup
+    ผิดไฟล์ กรณีนั้นจึงกลายเป็นข้อความบอกทางบนหน้าล็อกอินแทน (ดู no_users)
+
+    Returns:
+        Response | None: None = ให้ request ไปต่อ, Response = ตีกลับที่ด่านนี้
+    """
+    g.user = None
+
+    if request.endpoint in PUBLIC_ENDPOINTS:
+        # static/uploads/ คือที่เก็บไฟล์แนบ ไม่ใช่ asset ของหน้าเว็บ มันบังเอิญอยู่ใต้
+        # static/ จึงถูก static route ของ Flask เสิร์ฟให้ฟรี ๆ ทั้งที่แอปไม่เคยลิงก์
+        # ไปที่นั้นเลย (ดาวน์โหลดจริงไปทาง /api/attachments/<id>) ถ้าไม่ปิด ไฟล์ PDF
+        # ทุกใบจะอ่านได้โดยไม่ต้องล็อกอินสำหรับคนที่รู้ชื่อไฟล์
+        if request.endpoint == 'static':
+            name = str((request.view_args or {}).get('filename', ''))
+            if name.replace('\\', '/').lower().startswith('uploads/'):
+                abort(404)
+        return None
+
+    con = get_db()
+    try:
+        ses = resolve_session(con, request.cookies.get(SESSION_COOKIE))
+        if ses is None:
+            # ใช้บอกทางตอนเพิ่งอัปเกรดมาจากเวอร์ชันก่อนล็อกอิน (ตารางเปล่า) เท่านั้น
+            # ไม่ได้ใช้ตัดสินว่าต้องล็อกอินหรือไม่
+            g.no_users = count_users(con) == 0
+        con.commit()
+    except sqlite3.Error:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+    if ses is None:
+        if request.path.startswith('/api/'):
+            # 401 ไม่ใช่ "ไม่มี backend": backend อยู่ครบและข้อมูลอยู่ครบ ฝั่ง client
+            # ต้องคงโหมด Flask ไว้แล้วพาไปล็อกอิน ไม่ใช่สลับไปอ่าน LocalStorage ที่
+            # ว่างเปล่าแล้วรายงานว่ามี 0 รายการ (ดู docs/adr/0001)
+            return jsonify({'error': UNAUTHORIZED_MSG, 'login': url_for('login')}), 401
+        return redirect(url_for('login', next=request.full_path.rstrip('?')))
+
+    g.user = ses
+    return None
+
+
+@app.after_request
+def renew_session_cookie(resp):
+    """
+    ต่ออายุ cookie ทุก response ที่ล็อกอินอยู่ และลบ cookie ตอนออกจากระบบ
+
+    ต่ออายุทุกครั้งเพราะฝั่ง server เลื่อนอายุแบบ sliding (ดู resolve_session) ถ้า
+    cookie ค้างอยู่กับเวลาหมดอายุตอนล็อกอินครั้งแรก เบราว์เซอร์จะทิ้ง cookie ก่อนที่
+    เซสชันฝั่ง server จะหมดอายุ แล้วคนที่ใช้งานอยู่ตลอดจะถูกเด้งออกกลางวัน
+
+    ทิศทางที่ผิดคือ cookie ตายก่อน session ส่วน cookie ที่อยู่นานกว่า session ไม่เป็น
+    ปัญหา — ฝั่ง server เป็นผู้ตัดสินเสมอ token ที่หมดอายุแล้วก็ได้ 401 แล้วไปล็อกอิน
+
+    Parameters:
+        resp: Flask response object
+
+    Returns:
+        Response: resp ตัวเดิม
+    """
+    if getattr(g, 'drop_cookie', False):
+        resp.delete_cookie(SESSION_COOKIE, path='/')
+    elif getattr(g, 'user', None) and request.endpoint != 'static':
+        _set_session_cookie(resp, g.user['token'], g.user['remember'])
+    return resp
+
+
+def require_admin(view):
+    """
+    decorator สำหรับ route ที่ staff ทำไม่ได้
+
+    ใช้กับ DELETE /api/records (ลบทั้งฐาน) เป็นหลัก — route ที่น่ากลัวที่สุดในแอปนี้
+    ถ้าทุกคนที่ล็อกอินได้ทำทุกอย่างได้ เจ้าหน้าที่ที่กดพลาดหนึ่งครั้งก็ลบงานทั้งปี
+
+    Parameters:
+        view: view function
+
+    Returns:
+        function: view ที่ตรวจบทบาทก่อน
+    """
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not getattr(g, 'user', None) or g.user['role'] != ROLE_ADMIN:
+            audit('denied', f'{request.method} {request.path}')
+            return jsonify({'error': FORBIDDEN_MSG}), 403
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """
+    GET /login — ฟอร์มล็อกอิน, POST /login — ตรวจแล้วเปิดเซสชัน
+
+    เป็น form POST ธรรมดา ไม่ผ่าน apiFetch และไม่พึ่ง JavaScript เลย: ประตูหน้าบ้าน
+    ไม่ควรพึ่งชิ้นส่วนที่ซับซ้อนที่สุดในแอป ถ้าสคริปต์ใน index.html พังทั้งไฟล์
+    คนก็ยังต้องล็อกอินเข้ามาเห็นหน้าพัง ๆ นั้นได้
+
+    Returns:
+        Response: HTML ฟอร์ม, 401 พร้อมฟอร์มเดิมเมื่อไม่ผ่าน, หรือ redirect เมื่อผ่าน
+    """
+    if request.method == 'GET':
+        with closing(get_db()) as con:
+            g.no_users = count_users(con) == 0
+        return _render_login()
+
+    username = normalize_username(request.form.get('username'))
+    password = request.form.get('password') or ''
+    remember = bool(request.form.get('remember'))
+
+    con = get_db()
+    try:
+        user, why = authenticate(con, username, password)
+        if user is None:
+            con.commit()  # ตัวนับครั้งที่ผิดและเวลาล็อกต้องถูกบันทึกไว้จริง
+            log.info('login failed user=%s reason=%s from=%s',
+                     username, why, request.remote_addr)
+            return _render_login(error=LOGIN_FAILED_MSG, username=username), 401
+        token = start_session(con, user['id'], remember)
+        con.commit()
+    except sqlite3.Error:
+        con.rollback()
+        log.exception('login')
+        return _render_login(error='ระบบขัดข้อง กรุณาลองอีกครั้ง', username=username), 500
+    finally:
+        con.close()
+
+    log.info('audit user=%s login role=%s remember=%s from=%s',
+             user['username'], user['role'], int(remember), request.remote_addr)
+    resp = redirect(_safe_next(request.form.get('next')))
+    _set_session_cookie(resp, token, remember)
+    return resp
+
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    """
+    POST /logout — ลบเซสชันของเครื่องนี้ออกจาก DB จริง
+
+    เป็น POST ไม่ใช่ GET เพราะมันเปลี่ยนสถานะของระบบ (GET /logout ทำให้รูปภาพหรือ
+    ลิงก์ที่ไหนก็ได้เตะคนออกจากระบบได้)
+
+    Returns:
+        Response: redirect ไปหน้าล็อกอิน
+    """
+    token = request.cookies.get(SESSION_COOKIE)
+    con = get_db()
+    try:
+        con.execute('DELETE FROM sessions WHERE token=?', (token,))
+        con.commit()
+    except sqlite3.Error:
+        con.rollback()
+        log.exception('logout')
+    finally:
+        con.close()
+    audit('logout')
+    g.drop_cookie = True
+    return redirect(url_for('login'))
+
+
+@app.route('/change-password', methods=['GET', 'POST'])
+def change_password():
+    """
+    GET/POST /change-password — เปลี่ยนรหัสผ่านของตัวเอง
+
+    ต้องกรอกรหัสเดิมด้วย: ถ้าไม่ต้อง ใครที่นั่งหน้าเครื่องที่เปิดค้างไว้โดยไม่ล็อก
+    หน้าจอจะยึดบัญชีนั้นได้ทันที ซึ่งในสำนักงานแบบนี้เกิดได้จริงกว่าการเจาะผ่านเน็ต
+
+    เปลี่ยนสำเร็จแล้วไล่ทุกเครื่องอื่นของคนนี้ออก เหลือเฉพาะเครื่องที่กำลังพิมพ์อยู่ —
+    เหตุผลหลักที่คนเปลี่ยนรหัสคือ "รหัสรู้ถึงคนอื่นแล้ว" ถ้าเซสชันเก่ายังอยู่ต่ออีก
+    30 วัน การเปลี่ยนรหัสก็ไม่ได้แก้อะไรเลย
+
+    Returns:
+        Response: HTML ฟอร์ม, ฟอร์มพร้อม error, หรือ redirect เมื่อสำเร็จ
+    """
+    if request.method == 'GET':
+        return _render_login(mode='change',
+                            ok='เปลี่ยนรหัสผ่านแล้ว' if request.args.get('ok') else '')
+
+    current = request.form.get('current') or ''
+    new1    = request.form.get('new1') or ''
+    new2    = request.form.get('new2') or ''
+
+    if new1 != new2:
+        return _render_login(mode='change', error='รหัสผ่านใหม่สองช่องไม่ตรงกัน'), 400
+    problem = password_problem(new1)
+    if problem:
+        return _render_login(mode='change', error=problem), 400
+
+    con = get_db()
+    try:
+        user, why = authenticate(con, g.user['username'], current)
+        if user is None:
+            con.commit()  # รหัสเดิมผิดก็นับเป็นการกรอกผิดเหมือนกัน
+            log.info('change_password failed user=%s reason=%s',
+                     g.user['username'], why)
+            return _render_login(mode='change', error='รหัสผ่านเดิมไม่ถูกต้อง'), 401
+        set_password(con, user['id'], new1)
+        gone = revoke_sessions(con, user['id'], keep_token=g.user['token'])
+        con.commit()
+    except sqlite3.Error:
+        con.rollback()
+        log.exception('change_password')
+        return _render_login(mode='change', error='ระบบขัดข้อง กรุณาลองอีกครั้ง'), 500
+    finally:
+        con.close()
+
+    audit('change_password', f'revoked={gone}')
+    return redirect(url_for('change_password', ok=1))
+
+
+# ────────────────────────────────────────────────
 # Routes — Records
 # ────────────────────────────────────────────────
 
@@ -1137,10 +1483,18 @@ def index():
     client จะกลายเป็นเรียงตามตัวอักษรแทนลำดับช่องในฟอร์ม ไม่ตรงกับฝั่ง server
     list เก็บลำดับไว้ในตัวโครงสร้างเอง ไม่ขึ้นกับ flag ของ serializer
 
+    ส่งชื่อผู้ใช้และบทบาทไปด้วย เพื่อให้หัวหน้าจอแสดงว่ากำลังทำงานในนามใคร และซ่อน
+    ปุ่มที่บทบาทนั้นกดไม่ได้ การซ่อนปุ่มเป็นเรื่องความสะอาดของหน้าจอเท่านั้น
+    ไม่ใช่การบังคับสิทธิ์ — ด่านจริงอยู่ที่ require_admin ฝั่ง server เสมอ
+
     Returns:
         str: HTML ของ templates/index.html
     """
-    return render_template('index.html', required_fields=list(REQUIRED_FIELDS.items()))
+    return render_template('index.html',
+                           required_fields=list(REQUIRED_FIELDS.items()),
+                           current_user=g.user['username'],
+                           current_role=g.user['role'],
+                           is_admin=g.user['role'] == ROLE_ADMIN)
 
 @app.route('/api/records', methods=['GET'])
 def get_all():
@@ -1212,6 +1566,7 @@ def add_record():
     try:
         cur = con.execute(f'INSERT INTO records ({cols}) VALUES ({plh})', list(allowed.values()))
         con.commit()
+        audit('add_record', f'id={cur.lastrowid}')
         return jsonify({'id': cur.lastrowid, 'ok': True}), 201
     except sqlite3.IntegrityError:
         con.rollback()
@@ -1260,6 +1615,7 @@ def update_record(rid):
         con.commit()
         if cur.rowcount == 0:
             return jsonify({'error': 'ไม่สามารถอัปเดตได้ (rowcount=0)'}), 422
+        audit('update_record', f'id={rid}')
         return jsonify({'ok': True})
     except Exception:
         con.rollback()
@@ -1302,6 +1658,7 @@ def delete_record(rid):
         paths = [_stored_path(a['stored_name']) for a in atts if a['stored_name']]
         con.execute('DELETE FROM records WHERE id=?', [rid])
         con.commit()
+        audit('delete_record', f'id={rid} files={len(paths)}')
         # ลบไฟล์หลัง commit เท่านั้น ถ้าลบก่อนแล้ว DB ล้ม rollback จะคืน row ที่ชี้ไฟล์หาย
         for p in paths:
             _safe_remove(p)
@@ -1313,6 +1670,7 @@ def delete_record(rid):
         con.close()
 
 @app.route('/api/records', methods=['DELETE'])
+@require_admin
 def delete_all():
     """
     DELETE /api/records — ล้างข้อมูลทั้งระบบ (ทุก record + ไฟล์แนบทุกไฟล์)
@@ -1321,6 +1679,11 @@ def delete_all():
     ให้ CASCADE ล้างตาราง attachments ตาม → commit → แล้วจึงลบไฟล์บนดิสก์
     (frontend มี confirm dialog ป้องกันการกดพลาดอยู่แล้วชั้นหนึ่ง)
 
+    เฉพาะ admin เท่านั้น (ดู require_admin) — นี่คือ route ที่น่ากลัวที่สุดในแอป
+    และ **ต้องไม่แตะตาราง users หรือ sessions**: DELETE FROM records ลบเฉพาะข้อมูล
+    HR ถ้าวันหนึ่งใครเผลอเขียนให้มันล้างบัญชีไปด้วย คนที่กดจะล็อกตัวเองออกจากระบบ
+    ถาวรและไม่มีทางเข้ามาแก้อะไรได้อีก (มีเทสต์กันไว้)
+
     Returns:
         Response (JSON): 200 {'ok': True} หรือ 500 พร้อมข้อความ error (rollback แล้ว)
     """
@@ -1328,8 +1691,10 @@ def delete_all():
     try:
         atts = con.execute('SELECT stored_name FROM attachments').fetchall()
         paths = [_stored_path(a['stored_name']) for a in atts if a['stored_name']]
+        gone = con.execute('SELECT COUNT(*) FROM records').fetchone()[0]
         con.execute('DELETE FROM records')
         con.commit()
+        audit('delete_all', f'records={gone} files={len(paths)}')
         # ลบไฟล์หลัง commit ด้วยเหตุผลเดียวกับ delete_record
         for p in paths:
             _safe_remove(p)
@@ -1496,6 +1861,7 @@ def upload_attachment(rid):
         # row เก่ากลับมาชี้ไปยังไฟล์ที่ถูกลบไปแล้ว ผู้ใช้เห็นว่ามีไฟล์แนบแต่กดดาวน์โหลดได้ 404
         # ไฟล์กำพร้าเสียแค่พื้นที่ดิสก์ แต่ row ที่ชี้ไฟล์หายทำให้ผู้ใช้เข้าใจผิดว่ายังมีผลงานอยู่
         _safe_remove(old_path)
+        audit('upload_attachment', f'record={rid} book={book_no} size={size}')
         return jsonify({'id': cur.lastrowid, 'ok': True, 'filename': safe_name, 'size': size}), 201
     except sqlite3.IntegrityError:
         # ชน FK constraint = record หายไประหว่างที่เช็กกับที่ INSERT (ผู้ใช้อีกหน้าต่างลบทิ้ง)
@@ -1584,6 +1950,7 @@ def delete_attachment(att_id):
         path = _stored_path(row['stored_name']) if row and row['stored_name'] else None
         con.execute('DELETE FROM attachments WHERE id=?', [att_id])
         con.commit()
+        audit('delete_attachment', f'id={att_id}')
         # ลบไฟล์หลัง commit ด้วยเหตุผลเดียวกับ delete_record
         _safe_remove(path)
         return jsonify({'ok': True})

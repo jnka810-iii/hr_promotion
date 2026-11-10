@@ -10,33 +10,95 @@ fixtures กลางสำหรับชุด test ของ hr_promotion
 ถ้า test ดาวน์โหลดไฟล์แล้วไม่ `close()` การลบไฟล์ครั้งถัดไปจะล้มด้วย `PermissionError`
 (ซึ่ง `_safe_remove` กลืนไว้) ทำให้ assert เรื่องไฟล์ถูกลบ fail แบบงง ๆ
 ใช้ fixture `download` ที่ปิด response ให้เสมอ แทนการเรียก `client.get()` ตรง ๆ
+
+ตั้งแต่มีระบบล็อกอิน ทุก route ตอบ 401 ถ้าไม่มีเซสชัน fixture `client` จึงล็อกอิน
+เป็น admin ให้เสร็จก่อนคืนออกมา เทสต์ที่มีอยู่เดิมทั้งหมดจึงทำงานต่อได้โดยไม่ต้องแก้
+ทีละไฟล์ (`make_record` / `upload` / `download` พึ่ง `client` ตัวนี้ทั้งหมด)
+ใช้ `anon_client` เมื่อต้องการทดสอบสภาพ "ยังไม่ล็อกอิน" และ `staff_client` เมื่อต้องการ
+ทดสอบขอบเขตของบทบาท **ไม่มี** flag ปิด auth ตอนเทสต์ และจะต้องไม่มี: flag แบบนั้นคือ
+ประตูหลังที่ติดไปอยู่ในโค้ดจริงรอให้ใครตั้งผิด แล้ววันที่มันถูกตั้งผิด เทสต์ทุกตัว
+จะยังเขียวอยู่
 """
 
 import io
 import os
 import sqlite3
 import sys
+from contextlib import closing
 
 import pytest
+from werkzeug.security import generate_password_hash
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import app as hr  # noqa: E402  (ต้อง insert path ก่อน import)
 
+# บัญชีที่ทุกเทสต์ใช้ — ชื่อชัดเจนว่ามาจากเทสต์ เผื่อโผล่ไปอยู่ใน log ที่ไหน
+ADMIN_USER, ADMIN_PASS = 'tester.admin', 'test-password-1'
+STAFF_USER, STAFF_PASS = 'tester.staff', 'test-password-2'
+
+# SQL ของด่าน require_login — fault injector ต้องไม่ล้ม query นี้ (ดู _FailOnConnection)
+AUTH_SQL_MARK = 'FROM sessions s JOIN users u'
+
+
+def _cheap_hash(password):
+    """
+    แฮชแบบ "ถูก" สำหรับเทสต์เท่านั้น — ยังเป็นแฮชของ werkzeug จริง แค่ลดรอบลงเหลือ 1
+
+    ของจริงใช้ scrypt ซึ่งจงใจคิดช้า (นั่นคือทั้งหมดของประโยชน์มัน) ถ้าปล่อยให้เทสต์
+    ใช้ค่าจริง การสร้างผู้ใช้สองคนบวกการล็อกอินหนึ่งครั้งต่อหนึ่งเทสต์จะทำให้ชุดเทสต์
+    ที่เคยวิ่ง 3 วินาทีกลายเป็นเกือบนาที รูปแบบสตริงที่ได้ยังเป็นของ werkzeug เหมือนเดิม
+    `check_password_hash` จึงยังถูกเดินผ่านจริง ไม่ได้ถูกข้าม
+
+    ส่วนการพิสูจน์ว่า *ของจริง* ใช้ KDF ที่ช้าพอ อยู่ใน test_auth.py แยกไว้หนึ่งตัว
+    """
+    return generate_password_hash(password, method='pbkdf2:sha256:1')
+
 
 @pytest.fixture
 def hr_app(tmp_path, monkeypatch):
-    """app จริง แต่ชี้ DB และโฟลเดอร์อัปโหลดไปที่ temp dir"""
+    """app จริง แต่ชี้ DB และโฟลเดอร์อัปโหลดไปที่ temp dir และมีผู้ใช้สองบทบาทรออยู่"""
     monkeypatch.setattr(hr, 'DB_PATH', str(tmp_path / 'test.db'))
     monkeypatch.setattr(hr, 'UPLOAD_FOLDER', str(tmp_path / 'uploads'))
+    monkeypatch.setattr(hr, 'hash_password', _cheap_hash)
     os.makedirs(hr.UPLOAD_FOLDER, exist_ok=True)
     hr.init_db()
+    with closing(hr.get_db()) as con:
+        hr.create_user(con, ADMIN_USER, ADMIN_PASS, hr.ROLE_ADMIN)
+        hr.create_user(con, STAFF_USER, STAFF_PASS, hr.ROLE_STAFF)
+        con.commit()
     hr.app.config['TESTING'] = True
     return hr.app
 
 
+def login_as(hr_app, username, password):
+    """
+    คืน test client ที่ล็อกอินแล้ว (cookie เซสชันอยู่ใน cookie jar ของ client ตัวนั้น)
+
+    assert ที่นี่เลยเพราะถ้า fixture ล็อกอินไม่ผ่าน เทสต์ปลายทางจะ fail ด้วย 401
+    กองใหญ่ที่ชี้ไปผิดที่ — ความพังควรรายงานตัวเองที่จุดที่มันเกิด
+    """
+    c = hr_app.test_client()
+    r = c.post('/login', data={'username': username, 'password': password})
+    assert r.status_code == 302, 'fixture ล็อกอินไม่ผ่าน: ' + r.get_data(as_text=True)[:200]
+    return c
+
+
 @pytest.fixture
 def client(hr_app):
+    """client ที่ล็อกอินเป็น admin — ค่าเริ่มต้นของเทสต์เกือบทั้งหมด"""
+    return login_as(hr_app, ADMIN_USER, ADMIN_PASS)
+
+
+@pytest.fixture
+def staff_client(hr_app):
+    """client ที่ล็อกอินเป็น staff — ใช้ทดสอบขอบเขตของบทบาท"""
+    return login_as(hr_app, STAFF_USER, STAFF_PASS)
+
+
+@pytest.fixture
+def anon_client(hr_app):
+    """client ที่ไม่ล็อกอินเลย — ใช้ทดสอบว่าทุก route ปิดอยู่จริง"""
     return hr_app.test_client()
 
 
@@ -131,6 +193,12 @@ class _FailOnConnection:
     ครอบ sqlite3.Connection แล้วโยน exception ที่กำหนด เมื่อ SQL ขึ้นต้นตาม prefix
     และจดไว้ว่า `close()` ถูกเรียกหรือยัง — ตัวจดนี้คือสิ่งที่ทำให้ test ข้อ 11
     มองเห็น connection ที่ route เปิดแล้วไม่ปิดได้ (ดู `_SqlFaultInjector.unclosed`)
+
+    ยกเว้น query ของด่าน require_login ไว้หนึ่งตัว: ด่านเปิด connection ของตัวเองและ
+    ยิง SELECT ก่อนทุก request ถ้า injector ล้ม query นั้นด้วย request จะตายที่ด่าน
+    route ไม่ได้รันเลย แล้วเทสต์ทั้งหมดข้างล่างจะกลายเป็นการทดสอบด่านซ้ำ ๆ แทนที่จะ
+    ทดสอบ route ที่มันตั้งใจทดสอบ โดยยังเขียวอยู่ทั้งแถบ — ความพังที่มองไม่เห็น
+    ส่วนด่านเองมีเทสต์ของมันใน test_auth.py (บังคับให้ resolve_session ล้ม)
     """
 
     def __init__(self, con, prefix, exc):
@@ -138,7 +206,7 @@ class _FailOnConnection:
         self.closed = False
 
     def execute(self, sql, *a, **kw):
-        if sql.lstrip().upper().startswith(self._prefix):
+        if AUTH_SQL_MARK not in sql and sql.lstrip().upper().startswith(self._prefix):
             raise self._exc('simulated DB failure')
         return self._con.execute(sql, *a, **kw)
 

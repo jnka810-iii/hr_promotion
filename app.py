@@ -6,11 +6,13 @@ Flask + SQLite3 + pywebview  →  Desktop App (.exe)
 DB เก็บเฉพาะ stored_name (UUID filename) และ filename (ชื่อต้นฉบับ)
 """
 
-import os, re, sys, socket, sqlite3, threading, time, base64, json, uuid, shutil, logging
+import os, re, sys, socket, sqlite3, threading, time, base64, json, uuid, shutil, logging, secrets
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
 from logging.handlers import RotatingFileHandler
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, redirect, url_for
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # pywebview เป็น optional dependency: มี = เปิดเป็นหน้าต่าง desktop,
 # ไม่มี = fallback รันเป็น web server ธรรมดา (ดู main())
@@ -59,6 +61,33 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
 # สำเนาสำรองรายวันของ DB — อยู่ข้างตัวโปรแกรม ไม่ผ่าน git (ดู _backup_db)
 BACKUP_DIR    = os.path.join(BASE_DIR, 'backup')
 BACKUP_KEEP   = 14
+
+# ────────────────────────────────────────────────
+# ตัวตนและสิทธิ์ (ดู docs/adr/0003 และ 0004)
+# ────────────────────────────────────────────────
+
+# ชื่อ cookie ที่ถือ token ของเซสชัน — ค่าใน cookie เป็นเลขสุ่มล้วน ไม่มีความหมายในตัวเอง
+# ฝั่ง server เอาไปหาเจ้าของในตาราง sessions (ไม่ใช่ cookie เซ็นชื่อของ Flask จึงไม่มี
+# SECRET_KEY ให้ต้องเก็บที่ไหน และ logout ลบแถวได้จริง — ดู docs/adr/0003)
+SESSION_COOKIE = 'hr_session'
+# อายุเซสชัน: ปกติจบวันทำงาน ติ๊ก "จำฉันไว้" ได้ 30 วัน
+# เลื่อนอายุออกใหม่ทุก request ที่ผ่าน (sliding) เพราะฟอร์มนี้มี 13 ช่องบังคับ 5 ส่วน
+# คนกรอกจริงใช้เวลาเป็นสิบ ๆ นาที การหมดอายุตายตัวจากเวลาล็อกอินจะเด้งคนกลางฟอร์ม
+SESSION_HOURS          = 12
+SESSION_REMEMBER_DAYS  = 30
+# ผิดครบ 5 ครั้ง → ล็อกบัญชีนั้น 5 นาที แล้วปลดเอง ไม่ล็อกถาวรรอแอดมินปลด:
+# ใครก็ตามที่เดาชื่อผู้ใช้ของเพื่อนร่วมงานได้ จะล็อกเขาออกจากงานได้ทั้งวันด้วยการพิมพ์ผิด
+# 5 ครั้ง นั่นคือเครื่องมือกลั่นแกล้งที่เราสร้างให้เอง ส่วน 5 ครั้งต่อ 5 นาทีก็ทำให้
+# การไล่เดารหัสเป็นไปไม่ได้ในทางปฏิบัติอยู่แล้ว
+LOGIN_MAX_FAILS        = 5
+LOGIN_LOCK_MINUTES     = 5
+# ตรวจแค่ความยาว ไม่บังคับ "ต้องมีตัวใหญ่+ตัวเลข+อักขระพิเศษ" และไม่บังคับเปลี่ยนตามรอบ:
+# กฎรูปแบบยุ่บยั่บได้ Password1! ที่จดแปะข้างจอ ซึ่งในสำนักงานที่ภัยคือคนในวง LAN
+# การแปะกระดาษคือการพังจริง ไม่ใช่การพังทางทฤษฎี
+PASSWORD_MIN_LEN       = 8
+# บทบาททั้งหมดที่มี — กฎนี้อยู่ใน schema ด้วย (CHECK constraint ของ users.role)
+ROLE_ADMIN, ROLE_STAFF = 'admin', 'staff'
+ROLES                  = (ROLE_ADMIN, ROLE_STAFF)
 
 
 # ────────────────────────────────────────────────
@@ -132,6 +161,36 @@ def dstr():
         str: วันที่รูปแบบ 'YYYYMMDD' เช่น '20260711' (เรียงตามตัวอักษร = เรียงตามเวลา)
     """
     return datetime.now().strftime('%Y%m%d')
+
+# เวลาที่ "เทียบกันได้" — คนละตัวกับ now_str() และห้ามสลับกัน
+# now_str() คืน 'dd/mm/YYYY HH:MM' ซึ่งเอาไปเทียบ < > ไม่ได้เลย: '02/01/2026' < '31/12/2025'
+# ตามตัวอักษร คอลัมน์ที่ต้องถามว่า "หมดอายุหรือยัง" (sessions.expires_at, users.locked_until)
+# จึงเก็บรูปแบบนี้ ที่เรียงตามตัวอักษรแล้วตรงกับเรียงตามเวลา เทียบใน SQL ได้ตรง ๆ
+TS_FMT = '%Y-%m-%d %H:%M:%S'
+
+def ts_now() -> str:
+    """
+    คืนเวลาปัจจุบันในรูปแบบที่เทียบกันได้ (ดู TS_FMT)
+
+    Returns:
+        str: เวลาท้องถิ่นรูปแบบ 'YYYY-MM-DD HH:MM:SS'
+    """
+    return datetime.now().strftime(TS_FMT)
+
+def ts_after(**delta) -> str:
+    """
+    คืนเวลาในอนาคตในรูปแบบที่เทียบกันได้ ใช้คำนวณวันหมดอายุ
+
+    เวลาท้องถิ่นแบบไม่มี timezone เหมือนที่เหลือทั้งไฟล์ — ไทยไม่มี DST เซสชันจึงไม่
+    ยืดหรือหายไปหนึ่งชั่วโมงตามฤดู ถ้าวันหนึ่งระบบนี้ไปอยู่เขตเวลาที่มี DST ต้องแก้ตรงนี้
+
+    Parameters:
+        **delta: ส่งต่อให้ timedelta ตรง ๆ เช่น ts_after(hours=12) หรือ ts_after(days=30)
+
+    Returns:
+        str: เวลารูปแบบ 'YYYY-MM-DD HH:MM:SS'
+    """
+    return (datetime.now() + timedelta(**delta)).strftime(TS_FMT)
 
 def row_to_dict(row):
     """
@@ -413,6 +472,11 @@ def init_db():
     - กรณีพิเศษ: ถ้าพบคอลัมน์ file_data ในตาราง attachments แปลว่าเป็น schema
       ยุค BLOB → เรียก _migrate_blobs_to_files() ย้ายเป็น file-based ก่อน
 
+    ตาราง users / sessions ถูกสร้างที่นี่ด้วย DB ที่อัปเกรดมาจากเวอร์ชันก่อนล็อกอินจึงได้
+    ตารางเปล่า และ **ไม่มีใครเข้าแอปได้จนรัน manage_users.py add** ซึ่งเป็นพฤติกรรมที่
+    ตั้งใจ ไม่ใช่บั๊ก (ถ้า "ไม่มีผู้ใช้" แปลว่า "ไม่ต้องล็อกอิน" ประตูจะเปิดทุกครั้งที่
+    ตารางว่าง รวมถึงตอน restore backup ผิดไฟล์ — ดู require_login)
+
     Parameters: ไม่มี (ใช้ค่า global DB_PATH / UPLOAD_FOLDER)
 
     Returns:
@@ -513,15 +577,419 @@ def init_db():
             if col not in existing:
                 con.execute(f'ALTER TABLE records ADD COLUMN {col} {ctype}')
 
+        # ── ตัวตนและสิทธิ์ ──────────────────────────────
+        # อยู่ในไฟล์ DB เดียวกับ records โดยตั้งใจ: _backup_db() สำรองไฟล์เดียว และเทสต์
+        # monkeypatch DB_PATH ตัวเดียว ไฟล์ที่สองคือ path ที่สองที่คนลืมสำรองและลืม patch
+        # ไม่มี FK ไปหา records เพราะ "ผู้ใช้" (คนที่ล็อกอิน) กับ record (ผู้ถูกประเมิน)
+        # เป็นของคนละอย่าง แม้บางทีจะเป็นคนเดียวกัน — ลบ record ต้องไม่กระทบบัญชีใคร
+        #
+        # กฎของ role อยู่ใน schema ไม่ใช่แค่ในโค้ดที่เขียนแถวนี้: CHECK กัน role พิมพ์ผิด
+        # อย่าง 'Admin' หรือ 'manager' ไม่ให้ลงไปนอนใน DB แล้วกลายเป็นบัญชีที่ผ่านการ
+        # ตรวจ "ไม่ใช่ admin" ทุกข้อ (SQLite เพิ่ม CHECK ทีหลังด้วย ALTER ไม่ได้)
+        con.execute(f"""
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT    NOT NULL UNIQUE,
+                password_hash TEXT    NOT NULL,
+                role          TEXT    NOT NULL DEFAULT '{ROLE_STAFF}'
+                              CHECK (role IN ('{ROLE_ADMIN}', '{ROLE_STAFF}')),
+                is_active     INTEGER NOT NULL DEFAULT 1,
+                failed_count  INTEGER NOT NULL DEFAULT 0,
+                locked_until  TEXT,
+                created       TEXT,
+                updated       TEXT
+            )
+        """)
+        # token เป็น PRIMARY KEY เพราะทุก request ค้นด้วย token
+        # ON DELETE CASCADE ไม่เคยได้ใช้ในทางปฏิบัติ (ไม่มีคำสั่งลบผู้ใช้ มีแต่ปิดบัญชี)
+        # แต่ใส่ไว้ให้ schema พูดความจริงว่าเซสชันไม่มีความหมายถ้าไม่มีเจ้าของ
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token      TEXT    PRIMARY KEY,
+                user_id    INTEGER NOT NULL,
+                expires_at TEXT    NOT NULL,
+                remember   INTEGER NOT NULL DEFAULT 0,
+                created    TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        # จำเป็นจริง ไม่ใช่ index เผื่อไว้: การเพิกถอน "ทุกเครื่องของคนนี้" เกิดขึ้นที่
+        # logout-all, เปลี่ยนรหัสผ่าน และปิดบัญชี ทั้งสามเส้นทางค้นด้วย user_id ซึ่ง
+        # PRIMARY KEY ที่ token ช่วยไม่ได้เลย
+        con.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)')
+
         orphaned = _dedupe_attachment_slots(con)
         con.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_att_record_book '
                     'ON attachments(record_id, book_no)')
+        # เก็บกวาดเซสชันหมดอายุตอนเปิดโปรแกรม (อีกที่คือตอนล็อกอินสำเร็จ) — ไม่มี thread
+        # เฝ้า เพราะแอปนี้เปิดปิดเป็นรอบตามวันทำงาน และตารางโตหนึ่งแถวต่อการล็อกอินหนึ่งครั้ง
+        # แถวที่หมดอายุแต่ยังค้างอยู่ใช้ล็อกอินไม่ได้อยู่แล้ว การตรวจเทียบเวลาจริงทุกครั้ง
+        # ไม่ได้พึ่งว่าแถวถูกลบไปหรือยัง
+        con.execute('DELETE FROM sessions WHERE expires_at < ?', (ts_now(),))
 
         con.commit()
 
     # ลบไฟล์หลัง commit เสมอ ตาม invariant เดียวกับ delete_record
     for path in orphaned:
         _safe_remove(path)
+
+
+# ────────────────────────────────────────────────
+# ผู้ใช้ เซสชัน และรหัสผ่าน
+#
+# ทุกฟังก์ชันในส่วนนี้รับ `con` เข้ามาและ **ไม่ commit เอง** ผู้เรียกเป็นเจ้าของ
+# transaction ทั้งก้อน (เหมือนทุก write path ในไฟล์นี้) เพื่อให้ "ตั้งรหัสใหม่ +
+# ไล่เซสชันเก่าออก" เกิดพร้อมกันหรือไม่เกิดเลย ไม่ใช่สองก้อนที่ล้มกลางทางได้
+#
+# manage_users.py import ส่วนนี้ไปใช้ตรง ๆ กฎรหัสผ่านและกฎชื่อผู้ใช้จึงมีที่เดียว
+# ไม่ใช่สองสำเนาที่ค่อย ๆ เลื่อนออกจากกันระหว่าง CLI กับหน้าเว็บ
+# ────────────────────────────────────────────────
+
+# ชื่อผู้ใช้: ตัวพิมพ์เล็ก ตัวเลข จุด ขีด ขีดล่าง 3-32 ตัว ไม่รับอักษรไทยและไม่รับ
+# อักษรนอก ASCII เลย — ชื่อผู้ใช้ไปปรากฏในบรรทัด log ที่ใช้ชี้ว่าใครลบอะไร และมันถูก
+# จองไว้ตลอดไป (ไม่มีคำสั่งลบบัญชี) ถ้ารับอักษรนอก ASCII จะมีคู่ที่หน้าตาเหมือนกันสนิท
+# แต่เป็นคนละบัญชี เช่น 'admin' ที่ a เป็นอักษรซีริลลิก — คนอ่าน log แยกไม่ออกด้วยตา
+USERNAME_RE = re.compile(r'^[a-z0-9._-]{3,32}$')
+
+# ใช้เผาเวลาให้เท่ากันตอนชื่อผู้ใช้ไม่มีอยู่จริง (ดู authenticate)
+# สร้างครั้งแรกที่ต้องใช้ ไม่ใช่ตอน import — scrypt จงใจคิดช้า การสร้างตอน import
+# จะหน่วงการเปิดโปรแกรมทุกครั้งเพื่อของที่อาจไม่ถูกใช้เลย
+_dummy_hash = None
+
+
+def normalize_username(name) -> str:
+    """
+    ทำชื่อผู้ใช้ให้เป็นรูปแบบมาตรฐานก่อนเทียบหรือบันทึก
+
+    ตัวพิมพ์ใหญ่-เล็กไม่แยกกัน: 'Somchai' กับ 'somchai' ต้องเป็นบัญชีเดียวกัน ไม่ใช่
+    สองบัญชีที่ UNIQUE index มองว่าต่างกันแต่คนมองว่าเหมือนกัน
+
+    Parameters:
+        name: ค่าที่รับมาจากฟอร์มหรือ argv (อะไรก็ได้ รวมถึง None)
+
+    Returns:
+        str: ชื่อที่ตัดช่องว่างหัวท้ายและแปลงเป็นตัวพิมพ์เล็กแล้ว
+    """
+    return str(name or '').strip().lower()
+
+
+def username_problem(username: str) -> str:
+    """
+    ตรวจชื่อผู้ใช้ตามกฎของ USERNAME_RE
+
+    Parameters:
+        username (str): ชื่อที่ผ่าน normalize_username() มาแล้ว
+
+    Returns:
+        str: ข้อความบอกปัญหา หรือ '' ถ้าผ่าน
+    """
+    if not USERNAME_RE.match(username):
+        return 'ชื่อผู้ใช้ต้องเป็น a-z 0-9 . _ - ยาว 3-32 ตัว'
+    return ''
+
+
+def password_problem(password) -> str:
+    """
+    ตรวจรหัสผ่านตามนโยบายเดียวของระบบ — ความยาวเท่านั้น (ดู PASSWORD_MIN_LEN)
+
+    Parameters:
+        password: รหัสผ่านดิบที่ผู้ใช้กรอก
+
+    Returns:
+        str: ข้อความบอกปัญหา (สั้นกว่า 80 ตัวอักษรเสมอ) หรือ '' ถ้าผ่าน
+    """
+    if len(str(password or '')) < PASSWORD_MIN_LEN:
+        return f'รหัสผ่านต้องยาวอย่างน้อย {PASSWORD_MIN_LEN} ตัวอักษร'
+    return ''
+
+
+def hash_password(password: str) -> str:
+    """
+    แฮชรหัสผ่านด้วย werkzeug (scrypt เป็นค่าเริ่มต้น salt อยู่ในสตริงผลลัพธ์แล้ว)
+
+    ใช้ของที่ติดมากับ flask อยู่แล้ว ไม่เพิ่ม dependency และไม่เขียน crypto เอง
+    ห้ามมี hashlib.sha256(password) ที่ไหนในไฟล์นี้ — SHA ออกแบบมาให้เร็ว ซึ่งตรงข้าม
+    กับสิ่งที่ต้องการตอนเก็บรหัสผ่าน
+
+    Parameters:
+        password (str): รหัสผ่านดิบ
+
+    Returns:
+        str: สตริงแฮชพร้อมเก็บลง users.password_hash
+    """
+    return generate_password_hash(password)
+
+
+def find_user(con, username: str):
+    """
+    หาผู้ใช้จากชื่อ (ชื่อถูก normalize แล้ว)
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        username (str): ชื่อผู้ใช้
+
+    Returns:
+        sqlite3.Row | None: แถวใน users หรือ None ถ้าไม่มี
+    """
+    return con.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
+
+
+def count_users(con) -> int:
+    """
+    นับจำนวนบัญชีทั้งหมด (รวมที่ปิดอยู่)
+
+    ใช้เพื่อ *บอกทาง* ตอนยังไม่มีบัญชีเลย ไม่ใช่เพื่อข้ามการตรวจสิทธิ์
+    ห้ามเขียน `if count_users(con) == 0: ผ่านเลย` ที่ไหนทั้งสิ้น — นั่นคือประตูเปิด
+    ที่กลับมาทุกครั้งที่ตารางว่าง รวมถึงตอน restore backup ผิดไฟล์
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+
+    Returns:
+        int: จำนวนแถวในตาราง users
+    """
+    return con.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+
+
+def create_user(con, username: str, password: str, role: str = ROLE_STAFF) -> int:
+    """
+    สร้างบัญชีใหม่ (ผู้เรียก commit เอง)
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        username (str): ชื่อผู้ใช้ที่ normalize และตรวจแล้ว
+        password (str): รหัสผ่านดิบที่ตรวจแล้ว
+        role (str): ต้องเป็นค่าใน ROLES (schema มี CHECK กันไว้อีกชั้น)
+
+    Returns:
+        int: id ของผู้ใช้ที่สร้าง
+
+    Raises:
+        ValueError: role ไม่อยู่ใน ROLES
+        sqlite3.IntegrityError: ชื่อผู้ใช้ซ้ำ (UNIQUE index)
+    """
+    if role not in ROLES:
+        raise ValueError(f'role ต้องเป็นหนึ่งใน {ROLES}')
+    cur = con.execute(
+        'INSERT INTO users (username, password_hash, role, created, updated) VALUES (?,?,?,?,?)',
+        (username, hash_password(password), role, now_str(), now_str()))
+    return cur.lastrowid
+
+
+def set_password(con, user_id: int, password: str):
+    """
+    ตั้งรหัสผ่านใหม่และล้างสถานะล็อก (ผู้เรียก commit เอง)
+
+    **ไม่** เพิกถอนเซสชันให้ — ผู้เรียกต้องเรียก revoke_sessions() เอง เพราะแต่ละ
+    เส้นทางเก็บเซสชันไว้ไม่เหมือนกัน: ผู้ใช้เปลี่ยนรหัสเองต้องไม่เด้งตัวเองออกจาก
+    เครื่องที่กำลังพิมพ์อยู่ ส่วนแอดมินรีเซ็ตให้คนอื่นต้องไล่ออกทุกเครื่อง
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        user_id (int): เจ้าของรหัสผ่าน
+        password (str): รหัสผ่านดิบที่ตรวจแล้ว
+
+    Returns:
+        None
+    """
+    con.execute('UPDATE users SET password_hash=?, failed_count=0, locked_until=NULL, '
+                'updated=? WHERE id=?', (hash_password(password), now_str(), user_id))
+
+
+def set_role(con, user_id: int, role: str):
+    """
+    เปลี่ยนบทบาทของผู้ใช้ (ผู้เรียก commit เอง)
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        user_id (int): ผู้ใช้
+        role (str): ต้องเป็นค่าใน ROLES
+
+    Returns:
+        None
+
+    Raises:
+        ValueError: role ไม่อยู่ใน ROLES
+    """
+    if role not in ROLES:
+        raise ValueError(f'role ต้องเป็นหนึ่งใน {ROLES}')
+    con.execute('UPDATE users SET role=?, updated=? WHERE id=?', (role, now_str(), user_id))
+
+
+def set_active(con, user_id: int, active: bool):
+    """
+    ปิดหรือเปิดบัญชี (ผู้เรียก commit เอง)
+
+    ปิดบัญชีไล่เซสชันของคนนั้นออกทันทีในคำสั่งเดียวกัน ไม่ใช่รอให้หมดอายุเอง — ถ้า
+    คนที่ลาออกแล้วยังทำงานต่อได้อีก 30 วันเพราะเคยติ๊ก "จำฉันไว้" การปิดบัญชีก็ไม่ได้
+    ปิดอะไร (นี่คือเหตุผลหลักที่เซสชันอยู่ฝั่ง server — ดู docs/adr/0003)
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        user_id (int): ผู้ใช้
+        active (bool): True = เปิด, False = ปิด
+
+    Returns:
+        None
+    """
+    con.execute('UPDATE users SET is_active=?, updated=? WHERE id=?',
+                (1 if active else 0, now_str(), user_id))
+    if not active:
+        revoke_sessions(con, user_id)
+
+
+def revoke_sessions(con, user_id: int, keep_token: str = None) -> int:
+    """
+    ลบเซสชันของผู้ใช้หนึ่งคน (ผู้เรียก commit เอง)
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        user_id (int): เจ้าของเซสชัน
+        keep_token (str | None): เซสชันที่ไม่ต้องลบ ใช้ตอนคนเปลี่ยนรหัสผ่านของตัวเอง
+                                 เพื่อไม่ให้เด้งตัวเองออกจากเครื่องที่กำลังใช้อยู่
+
+    Returns:
+        int: จำนวนเซสชันที่ถูกลบ
+    """
+    if keep_token:
+        cur = con.execute('DELETE FROM sessions WHERE user_id=? AND token!=?',
+                          (user_id, keep_token))
+    else:
+        cur = con.execute('DELETE FROM sessions WHERE user_id=?', (user_id,))
+    return cur.rowcount
+
+
+def session_window(remember) -> dict:
+    """
+    คืนความยาวอายุเซสชันตามว่าติ๊ก "จำฉันไว้" ไว้หรือไม่
+
+    เก็บแค่ธง remember ใน DB ไม่ได้เก็บจำนวนวินาที — ถ้าวันหน้าปรับ SESSION_HOURS
+    เซสชันที่ยังมีชีวิตอยู่จะได้อายุใหม่ตามไปด้วย ไม่ใช่ค้างอยู่กับค่าที่หมดสมัยแล้ว
+
+    Parameters:
+        remember: ค่าจากคอลัมน์ sessions.remember (หรือ bool จากฟอร์ม)
+
+    Returns:
+        dict: keyword arguments สำหรับ timedelta / ts_after()
+    """
+    return {'days': SESSION_REMEMBER_DAYS} if remember else {'hours': SESSION_HOURS}
+
+
+def start_session(con, user_id: int, remember: bool = False) -> str:
+    """
+    สร้างเซสชันใหม่หนึ่งแถวแล้วคืน token (ผู้เรียก commit เอง)
+
+    token มาจาก secrets.token_urlsafe ไม่ใช่ uuid4 หรือ random: token_urlsafe ใช้
+    ตัวสร้างเลขสุ่มเชิงรหัสลับของ OS ตัวนี้เดาไม่ได้แม้เห็น token อื่นมาแล้วกี่ตัวก็ตาม
+    ส่วน uuid4 ของบางแพลตฟอร์มมีส่วนที่คาดเดาได้ และ token นี้คือสิ่งเดียวที่กั้นข้อมูล
+    ทั้งหมดไว้ — ไม่มีลายเซ็นหรือความลับอื่นประกอบเลย
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        user_id (int): เจ้าของเซสชัน
+        remember (bool): True = อายุ 30 วัน, False = 12 ชั่วโมง
+
+    Returns:
+        str: token ที่ต้องเอาไปใส่ cookie
+    """
+    token = secrets.token_urlsafe(32)
+    con.execute('INSERT INTO sessions (token, user_id, expires_at, remember, created) '
+                'VALUES (?,?,?,?,?)',
+                (token, user_id, ts_after(**session_window(remember)),
+                 1 if remember else 0, ts_now()))
+    return token
+
+
+def resolve_session(con, token: str):
+    """
+    แปลง token เป็นผู้ใช้ และเลื่อนอายุเซสชันเมื่อควร (ผู้เรียก commit เอง)
+
+    คืน None ในทุกกรณีที่ใช้ต่อไม่ได้ — ไม่มี token, ไม่มีแถวนั้น, หมดอายุแล้ว, หรือ
+    บัญชีถูกปิด แถวที่หมดอายุถูกลบทิ้งตรงนั้น และบัญชีที่ถูกปิดถูกไล่ออกทุกเครื่อง
+    (set_active ทำไปแล้วครั้งหนึ่ง อันนี้คือด่านที่สองเผื่อมีใครแก้ is_active ด้วยมือ
+    ผ่าน fix_db.py)
+
+    การเลื่อนอายุ (sliding) ไม่ได้เขียน DB ทุก request: เลื่อนเฉพาะเมื่ออายุที่เหลือ
+    น้อยกว่าครึ่งหนึ่งของกรอบ ทำให้หนึ่งเซสชันถูกเขียนมากที่สุดครั้งเดียวต่อครึ่งกรอบ
+    (6 ชั่วโมง หรือ 15 วัน) แทนที่จะจับ write lock ของ SQLite ทุกครั้งที่ใครโหลดตาราง
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        token (str): ค่าจาก cookie
+
+    Returns:
+        sqlite3.Row | None: แถวที่มี user_id, username, role, token, remember
+    """
+    if not token:
+        return None
+    row = con.execute("""
+        SELECT s.token, s.expires_at, s.remember,
+               u.id AS user_id, u.username, u.role, u.is_active
+          FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.token = ?
+    """, (token,)).fetchone()
+    if row is None:
+        return None
+    if row['expires_at'] <= ts_now():
+        con.execute('DELETE FROM sessions WHERE token=?', (token,))
+        return None
+    if not row['is_active']:
+        revoke_sessions(con, row['user_id'])
+        return None
+
+    window = session_window(row['remember'])
+    left = datetime.strptime(row['expires_at'], TS_FMT) - datetime.now()
+    if left < timedelta(**window) / 2:
+        con.execute('UPDATE sessions SET expires_at=? WHERE token=?',
+                    (ts_after(**window), token))
+    return row
+
+
+def authenticate(con, username: str, password: str):
+    """
+    ตรวจชื่อผู้ใช้กับรหัสผ่าน และจัดการตัวนับที่ผิด (ผู้เรียก commit เอง)
+
+    คืนเหตุผลแยกกันเพื่อ *เขียน log* เท่านั้น — ข้อความที่ผู้ใช้เห็นต้องเป็นอันเดียวกัน
+    ทุกกรณี ไม่งั้นหน้าล็อกอินจะกลายเป็นเครื่องมือไล่ถามว่าในระบบมีใครอยู่
+
+    เวลาที่ใช้ก็ต้องใกล้เคียงกันด้วย ชื่อที่ไม่มีอยู่จริงจึงยังถูกนำไปตรวจกับแฮชหลอก
+    หนึ่งครั้ง ถ้าข้ามไปเลย การตอบกลับเร็วผิดสังเกตจะบอกได้เองว่าชื่อนั้นไม่มีในระบบ
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        username (str): ชื่อที่ผ่าน normalize_username() แล้ว
+        password (str): รหัสผ่านดิบ
+
+    Returns:
+        tuple[sqlite3.Row | None, str]: (ผู้ใช้, เหตุผล) เหตุผลเป็นหนึ่งใน
+        'ok' / 'no_user' / 'disabled' / 'locked' / 'bad_password'
+    """
+    global _dummy_hash
+    user = find_user(con, username)
+    if user is None:
+        if _dummy_hash is None:
+            _dummy_hash = hash_password(secrets.token_urlsafe(16))
+        check_password_hash(_dummy_hash, str(password or ''))
+        return None, 'no_user'
+    if not user['is_active']:
+        return None, 'disabled'
+    if user['locked_until'] and user['locked_until'] > ts_now():
+        return None, 'locked'
+
+    if not check_password_hash(user['password_hash'], str(password or '')):
+        fails = (user['failed_count'] or 0) + 1
+        if fails >= LOGIN_MAX_FAILS:
+            con.execute('UPDATE users SET failed_count=0, locked_until=? WHERE id=?',
+                        (ts_after(minutes=LOGIN_LOCK_MINUTES), user['id']))
+        else:
+            con.execute('UPDATE users SET failed_count=? WHERE id=?', (fails, user['id']))
+        return None, 'bad_password'
+
+    if user['failed_count'] or user['locked_until']:
+        con.execute('UPDATE users SET failed_count=0, locked_until=NULL WHERE id=?',
+                    (user['id'],))
+    con.execute('DELETE FROM sessions WHERE expires_at < ?', (ts_now(),))
+    return user, 'ok'
 
 
 # ────────────────────────────────────────────────

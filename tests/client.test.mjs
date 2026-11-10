@@ -9,7 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { load, counts, setInput, serverError, noServer, serverOk } from './client_harness.mjs';
+import {
+  load, counts, setInput, serverError, noServer, serverOk, unauthorized,
+} from './client_harness.mjs';
 
 const REC = n => Array.from({ length: n }, (_, i) => ({ id: i + 1, p1_fname: 'ชื่อ' + i }));
 const DB_ERROR = 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง';
@@ -169,6 +171,65 @@ test('apiFetch ติด httpStatus เฉพาะตอน server ตอบ �
 
   const b = await load({ fetch: noServer() });
   await assert.rejects(() => b.mod.apiFetch('/api/records'), e => e.httpStatus === undefined);
+});
+
+// ────────────────────────────────────────────────
+// เซสชันหมดอายุ (401) — "ยังไม่ล็อกอิน" ไม่ใช่โหมดการทำงานตัวที่สาม
+// ────────────────────────────────────────────────
+
+test('เซสชันหมดอายุ (401): อยู่โหมด Flask ไม่ตกไป LocalStorage', async () => {
+  const { mod, el } = await load({ fetch: unauthorized() });
+  const mode = await mod.detectMode();
+
+  assert.equal(mode, 'flask-unauthorized');
+  assert.equal(mod.USE_FLASK, true,
+    '401 หมายถึง backend มีอยู่และข้อมูลอยู่ครบ แค่เราไม่มีสิทธิ์อ่านตอนนี้ —' +
+    ' สลับไป LocalStorage ที่ว่างแล้วรายงาน 0 รายการ คือบั๊กเดิมคนละสาเหตุ');
+  assert.doesNotMatch(el['mode-badge'].innerHTML, /LocalStorage/);
+  assert.match(el['mode-badge'].innerHTML, /เข้าสู่ระบบ/,
+    'ป้ายต้องบอกสาเหตุจริง ไม่ใช่ "อ่านข้อมูลไม่สำเร็จ" ซึ่งพาไปแก้ผิดทาง');
+});
+
+test('เซสชันหมดอายุ (401): แถวแจ้งเตือนขึ้น พร้อมทางไปล็อกอิน', async () => {
+  const { mod, el } = await load({ fetch: unauthorized() });
+  mod.setUseFlask(true);
+  await assert.rejects(() => mod.apiFetch('/api/records'), e => e.httpStatus === 401);
+
+  assert.equal(el['auth-bar'].style.display, 'flex',
+    'toast หายเองใน 6 วินาที ถ้าไม่มีแถวค้างไว้ผู้ใช้จะกดบันทึกซ้ำแล้วงงว่าทำไมไม่ได้');
+});
+
+test('เซสชันหมดอายุ (401): ข้อมูลเดิมบนจอไม่ถูกล้าง และตัวนับไม่กลายเป็น 0', async () => {
+  let expired = false;
+  const { mod, el } = await load({
+    fetch: async (...a) => (expired ? unauthorized()(...a) : serverOk(REC(3))(...a)),
+  });
+  mod.setUseFlask(true);
+  await mod.loadAll();
+
+  expired = true;
+  const state = await mod.loadAll();
+  mod.renderTable();
+
+  assert.equal(state, 'stale');
+  assert.equal(mod.allRecords.length, 3, '401 ไม่ใช่เหตุผลที่จะทิ้งข้อมูลบนจอ');
+  assert.notEqual(counts(el).badge, 0);
+});
+
+test('401 ต้องไม่ทำให้ loadAll throw — ผู้เรียกทั้ง 7 จุดยังไม่ต้องมี catch', async () => {
+  const { mod } = await load({ fetch: unauthorized() });
+  mod.setUseFlask(true);
+  await assert.doesNotReject(() => mod.loadAll());
+});
+
+test('onUnauthorized ไม่พาออกจากหน้า — งานที่พิมพ์ไว้ในฟอร์มต้องไม่หาย', async () => {
+  const { mod, el } = await load({ fetch: unauthorized() });
+  setInput(el, 'p1_fname', 'สมชาย');
+  mod.setUseFlask(true);
+  await assert.rejects(() => mod.apiFetch('/api/records', 'POST', { p1_fname: 'สมชาย' }));
+
+  assert.equal(el['p1_fname'].value, 'สมชาย',
+    'redirect ทันทีตอน 401 = ทิ้งฟอร์ม 13 ช่องที่ผู้ใช้เพิ่งกรอก');
 });
 
 // ────────────────────────────────────────────────

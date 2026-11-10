@@ -585,6 +585,32 @@ def test_change_password_rejects_a_mismatch_and_a_short_one(client):
 
 
 # ────────────────────────────────────────────────
+# หน้าหลักรู้ว่าใครกำลังใช้งาน
+# ────────────────────────────────────────────────
+
+def test_the_page_shows_who_is_logged_in_and_a_way_out(client):
+    """
+    ถ้าหน้าจอไม่บอกว่ากำลังทำงานในนามใคร คนที่ใช้เครื่องรวมกันจะบันทึกข้อมูลใน
+    ชื่อของคนก่อนหน้าโดยไม่รู้ตัว — และ log จะชี้ไปที่คนผิด
+    """
+    page = client.get('/').get_data(as_text=True)
+    assert ADMIN_USER in page
+    assert 'action="/logout"' in page
+    assert 'method="post"' in page           # ออกจากระบบต้องไม่ใช่ลิงก์ GET
+    assert '/change-password' in page
+
+
+def test_the_wipe_button_is_hidden_from_staff(client, staff_client):
+    """
+    ซ่อนปุ่มเป็นเรื่องความสะอาดของหน้าจอ ไม่ใช่การบังคับสิทธิ์ (ด่านจริงคือ 403)
+    แต่การโชว์ปุ่มที่กดแล้วได้ 403 ทุกครั้งก็คือการวางกับดักไว้ให้ผู้ใช้
+    """
+    # ตรวจที่ปุ่ม ไม่ใช่ที่ชื่อฟังก์ชัน — ตัวฟังก์ชันยังอยู่ในสคริปต์ของทุกคน
+    assert 'onclick="clearAll()"' in client.get('/').get_data(as_text=True)
+    assert 'onclick="clearAll()"' not in staff_client.get('/').get_data(as_text=True)
+
+
+# ────────────────────────────────────────────────
 # audit log
 # ────────────────────────────────────────────────
 

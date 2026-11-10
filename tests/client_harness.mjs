@@ -19,7 +19,7 @@ const TEMPLATE = new URL('../templates/index.html', import.meta.url);
 /** สิ่งที่ harness ต้องเอาออกมาจาก index.html — ขาดตัวใดตัวหนึ่งถือว่าเทสต์ชุดนี้ล้าสมัย */
 const WANT = [
   'apiFetch', 'dbGetAll', 'loadAll', 'detectMode', 'renderTable', 'statusRow',
-  'retryLoad', 'byId', 'esc', 'fmtDate', 'toastError',
+  'retryLoad', 'byId', 'esc', 'fmtDate', 'toastError', 'onUnauthorized',
   'loadState', 'allRecords', 'USE_FLASK', 'UNKNOWN', 'TBL_COLS',
 ];
 
@@ -142,6 +142,17 @@ export const serverError = () => async () => ({
 
 /** stub fetch: ไม่มี server เลย — fetch reject เอง จึงไม่มี httpStatus */
 export const noServer = () => async () => { throw new TypeError('Failed to fetch'); };
+
+/**
+ * stub fetch: server ตอบ 401 เพราะเซสชันหมดอายุ
+ * ต่างจาก noServer() คนละเรื่อง: มี backend อยู่และข้อมูลอยู่ครบ แค่เราไม่มีสิทธิ์
+ * ตอนนี้ — ซึ่งเป็นเหตุผลทั้งหมดที่ 401 ต้องไม่พาไปโหมด LocalStorage
+ */
+export const unauthorized = () => async () => ({
+  ok: false,
+  status: 401,
+  json: async () => ({ error: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง', login: '/login' }),
+});
 
 /** stub fetch: ตอบ rows สำเร็จ */
 export const serverOk = rows => async () => ({ ok: true, status: 200, json: async () => rows });

@@ -89,6 +89,8 @@ textarea.form-control{resize:vertical}
 .toast-container{position:fixed;bottom:22px;right:22px;z-index:9999}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
 .fade-in{animation:fadeIn .3s ease forwards}
+.authbar{background:#fff3cd;border-bottom:1px solid #ffe08a;color:#8a6d1f;font-size:.88rem;
+         padding:9px 18px;display:flex;align-items:center;flex-wrap:wrap;gap:4px}
 </style>
 </head>
 <body>
@@ -101,7 +103,31 @@ textarea.form-control{resize:vertical}
       <small>Human Resource Management System &nbsp;|&nbsp; Flask + SQLite / LocalStorage Fallback</small>
     </div>
   </div>
-  <span class="mbadge" id="mode-badge"><span class="dot dy"></span>กำลังเชื่อมต่อ...</span>
+  <div class="d-flex align-items-center gap-2 flex-wrap">
+    <span class="mbadge" id="mode-badge"><span class="dot dy"></span>กำลังเชื่อมต่อ...</span>
+    <span class="mbadge" title="บทบาท: {{ current_role }}">
+      <i class="fa fa-user-shield me-1"></i>{{ current_user }}
+    </span>
+    <a class="mbadge text-white text-decoration-none" href="{{ url_for('change_password') }}"
+       title="เปลี่ยนรหัสผ่านของตัวเอง"><i class="fa fa-key"></i></a>
+    <!-- ออกจากระบบเป็น POST ไม่ใช่ลิงก์: GET /logout ทำให้รูปหรือลิงก์ที่ไหนก็ได้
+         เตะคนออกจากระบบได้ (และ route ฝั่ง server รับแค่ POST อยู่แล้ว) -->
+    <form method="post" action="{{ url_for('logout') }}" class="m-0">
+      <button type="submit" class="mbadge border-0 text-white" style="cursor:pointer">
+        <i class="fa fa-right-from-bracket me-1"></i>ออกจากระบบ
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- แถบนี้ขึ้นเมื่อ API ตอบ 401 กลางการใช้งาน จงใจ **ไม่** พาออกจากหน้านี้ทันที:
+     ฟอร์มนี้มี 13 ช่องบังคับ 5 ส่วน การเด้งไปหน้าล็อกอินเลยคือการทิ้งงานที่พิมพ์ไว้
+     ลิงก์จึงเปิดแท็บใหม่ ให้ล็อกอินเสร็จแล้วกลับมากดบันทึกซ้ำได้โดยข้อมูลยังอยู่ครบ -->
+<div id="auth-bar" class="authbar" style="display:none">
+  <i class="fa fa-triangle-exclamation me-2"></i>
+  <span>เซสชันหมดอายุ — ข้อมูลที่กรอกไว้ยังอยู่ กรุณาเข้าสู่ระบบแล้วกดบันทึกอีกครั้ง</span>
+  <a href="{{ url_for('login') }}" target="_blank" rel="noopener"
+     class="btn btn-sm btn-light ms-2">เข้าสู่ระบบในแท็บใหม่</a>
 </div>
 
 <div class="tnav">
@@ -404,7 +430,12 @@ textarea.form-control{resize:vertical}
     </select>
     <button class="btn btn-success" onclick="exportAllCSV()"><i class="fa fa-file-csv me-1"></i>Export CSV</button>
     <button class="btn btn-warning text-dark" onclick="exportAllJSON()"><i class="fa fa-file-code me-1"></i>Export JSON</button>
+    {% if is_admin %}
+    {# ซ่อนปุ่มจาก staff เป็นเรื่องความสะอาดของหน้าจอเท่านั้น ไม่ใช่การบังคับสิทธิ์:
+       ด่านจริงคือ require_admin ฝั่ง server ซึ่งตอบ 403 ให้ทุกคนที่ไม่ใช่ admin
+       แม้จะยิง API ตรงโดยไม่ผ่านหน้านี้ #}
     <button class="btn btn-outline-danger" onclick="clearAll()"><i class="fa fa-trash me-1"></i>ลบทั้งหมด</button>
+    {% endif %}
     <span class="ms-auto text-muted small">แสดง <b id="rec-shown">0</b> / <b id="rec-total">0</b> รายการ</span>
   </div>
   <div class="table-responsive rounded shadow-sm">
@@ -615,9 +646,35 @@ async function apiFetch(path, method='GET', body=null){
     // "ไม่มี server เลย" ได้ — fetch ที่ reject เองจะไม่มี property นี้
     const e = new Error(msg);
     e.httpStatus = r.status;
+    if(r.status === 401) onUnauthorized();
     throw e;
   }
   return r.json();
+}
+
+/**
+ * onUnauthorized — สิ่งที่เกิดขึ้นเมื่อ API ตอบ 401 กลางการใช้งาน
+ *
+ * สามอย่างที่ตัวนี้ **ไม่** ทำ และแต่ละอย่างมีเหตุผลของตัวเอง:
+ *
+ *   1. ไม่สลับไปโหมด LocalStorage — 401 แปลว่า backend อยู่ครบและข้อมูลอยู่ครบ
+ *      แค่เราไม่มีสิทธิ์อ่านตอนนี้ การไปอ่าน LocalStorage ที่ว่างเปล่าแล้วรายงาน
+ *      "0 รายการ" คือการเอาที่เก็บผิดอันมาตอบ (เหตุผลเต็ม: docs/adr/0001)
+ *   2. ไม่พาออกจากหน้านี้ — ฟอร์มมี 13 ช่องบังคับ การ redirect ทันทีคือการทิ้ง
+ *      งานที่ผู้ใช้พิมพ์ไว้ ลิงก์ในแถบจึงเปิดแท็บใหม่แทน
+ *   3. ไม่แตะ `loadState` และไม่ล้างฟอร์ม — ผู้เรียกที่ throw ต่อจะจัดการเอง
+ *      ตามเส้นทาง error ปกติ ซึ่งเก็บข้อมูลรอบก่อนไว้แล้วติดป้ายว่าเก่า
+ *
+ * "ยังไม่ล็อกอิน" เป็นสถานะของเซสชัน ไม่ใช่โหมดการทำงานตัวที่สาม — ไฟสถานะยังบอก
+ * เรื่องที่เก็บข้อมูล (Flask/LocalStorage) เหมือนเดิม แค่เปลี่ยนคำอธิบาย
+ *
+ * @returns {undefined}
+ */
+function onUnauthorized(){
+  const bar = document.getElementById('auth-bar');
+  if(bar) bar.style.display = 'flex';
+  const b = document.getElementById('mode-badge');
+  if(b) b.innerHTML = '<span class="dot dy"></span>Flask + SQLite — ต้องเข้าสู่ระบบอีกครั้ง';
 }
 
 /**
@@ -639,7 +696,8 @@ async function apiFetch(path, method='GET', body=null){
  * แดง = ไม่มี backend อยู่โหมด offline จริง ๆ (โหมดนี้ไฟล์แนบใช้ไม่ได้และ
  * ข้อมูลอยู่แค่ใน browser ของเครื่องนี้ จึงต้องไม่ใช่สีเดียวกับโหมดปกติ)
  *
- * @returns {Promise<string>} โหมดที่เลือก: 'flask' | 'flask-error' | 'offline'
+ * @returns {Promise<string>} โหมดที่เลือก: 'flask' | 'flask-error' |
+ *                            'flask-unauthorized' | 'offline'
  */
 async function detectMode(){
   const b = document.getElementById('mode-badge');
@@ -653,8 +711,12 @@ async function detectMode(){
     // การพิงค่านั้นคือเหตุผลที่บั๊ก "500 แล้วตกไปโหมด offline" มองไม่เห็นตั้งแต่แรก
     if(err.httpStatus){
       USE_FLASK = true;
-      b.innerHTML = '<span class="dot dy"></span>Flask + SQLite — อ่านข้อมูลไม่สำเร็จ';
-      return 'flask-error';
+      // 401 เข้าข่ายเดียวกับ 5xx ตรงที่ backend มีอยู่จริง จึงอยู่โหมด Flask เหมือนกัน
+      // แต่คำอธิบายต่างกัน: "ต้องเข้าสู่ระบบ" ไม่ใช่ "อ่านข้อมูลไม่สำเร็จ"
+      // (onUnauthorized เขียนป้ายของมันไว้แล้ว ตรงนี้แค่ต้องไม่เขียนทับ)
+      if(err.httpStatus !== 401)
+        b.innerHTML = '<span class="dot dy"></span>Flask + SQLite — อ่านข้อมูลไม่สำเร็จ';
+      return err.httpStatus === 401 ? 'flask-unauthorized' : 'flask-error';
     }
     USE_FLASK = false;
     b.innerHTML = '<span class="dot dr"></span>LocalStorage (Offline)';
@@ -1337,6 +1399,10 @@ document.getElementById('mainForm').addEventListener('submit',async e=>{
 
   const rid=document.getElementById('rec-id').value;
   let savedId;
+  // `clearForm()` อยู่ **ข้างใน** try หลังการบันทึกสำเร็จ ไม่ใช่ใน finally โดยตั้งใจ:
+  // ถ้าบันทึกล้ม (รวมถึง 401 เพราะเซสชันหมดอายุ) การ throw เกิดก่อนถึงบรรทัดนั้น
+  // ฟอร์มจึงยังถืองานที่พิมพ์ไว้ครบและกดบันทึกซ้ำได้หลังล็อกอินใหม่
+  // ย้ายไป finally = ล้างฟอร์มทิ้งทุกครั้งที่ล้ม ซึ่งคือการทำลายงานของผู้ใช้
   try{
     if(rid){ await dbUpd(rid,d); savedId=rid; }
     else{ const res=await dbAdd(d); savedId=res?.id||res?._id||''; }

@@ -9,12 +9,18 @@ Flask + SQLite3 + pywebview → Desktop `.exe`
 python app.py        # pywebview window (or browser fallback on http://127.0.0.1:5000)
 ```
 
+Every route needs a login, so a fresh install needs an account before it opens at all:
+
+```bash
+python manage_users.py add <username> --role admin     # prompts for the password
+```
+
 ## Test
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                      # 124 tests, ~3s    — backend
-node --test tests/client.test.mjs     # 14 tests, ~0.3s   — frontend
+python -m pytest                      # 183 tests, ~6s    — backend
+node --test tests/client.test.mjs     # 19 tests, ~0.4s   — frontend
 ```
 
 Two commands, both must pass. `node --test tests/` does **not** work on this platform (node reads
@@ -37,6 +43,19 @@ repo's `backup/`. Same rule, one more path. The `fail_sql` fixture deliberately 
 (its `undo()` would restore the real paths mid-test). That injector also records `close()`, so
 `fail_sql.unclosed()` reports connections a route opened and never closed. That is what pins the
 connection invariant under Architecture across all 14 routes, instead of eyeballing each site.
+That injector skips the auth gate's own `SELECT` (matched on `AUTH_SQL_MARK`): failing it would
+kill every request before its route ran and quietly turn the whole connection suite into a test of
+the gate, still green. The gate has its own test that forces `resolve_session` to raise.
+
+The `client` fixture is **logged in as admin** — every route is closed otherwise, and the 124
+pre-login tests pass unchanged because `make_record` / `upload` / `download` all hang off it.
+Use `anon_client` for "not logged in" and `staff_client` for role limits. `hash_password` is
+monkeypatched to one pbkdf2 round in the fixtures: scrypt is deliberately slow, and paying it
+three times per test turns a 3-second suite into a minute. One test pins the real KDF.
+**There is no flag that disables auth for tests and there must not be** — the day someone sets it
+in production, every test would still be green.
+`test_every_route_is_closed_without_a_session` walks Flask's own `url_map`, not a hand-written
+list, so a route added without auth goes red with nobody having to remember this file.
 No `xfail` is currently parked; when you
 write a test ahead of its fix, mark it `xfail(strict=True)` so the run goes red the moment the
 fix lands and the marker has to be removed, instead of a `skip` that rots silently.
@@ -58,8 +77,9 @@ live files. Distinct from [check_db.py](check_db.py), which inspects schema and 
 It verifies live-DB integrity, that no ref's history carries the DB file, that `.gitignore` covers
 it, and that backups are readable and not in WAL mode. The load-bearing number is the orphan count:
 uploaded PDFs with no `attachments` row pointing at them. That is how far the DB has drifted from
-disk, and it is the number that exposed the git-tracking bug in the first place. It currently
-reports 54 orphans (617 MB) left over from that bug, so the script exits 1 until those are resolved.
+disk, and it is the number that exposed the git-tracking bug in the first place. The 54 orphans
+(617 MB) left over from that bug are gone; as of 10/11/2026 the script exits 0 on this
+installation, with the live DB holding 0 records.
 
 ## Architecture
 
@@ -83,7 +103,13 @@ Single-file backend: [app.py](app.py)
 | Thai JSON | `app.json.ensure_ascii = False` — required everywhere. **Not** `app.config['JSON_AS_ASCII']`: Flask ≥ 2.3 ignores that key silently, which escapes Thai to `\uXXXX` and grows the payload ~23% |
 | BASE_DIR | Resolves for both `python app.py` and PyInstaller `.exe` via `sys.executable` check |
 | Port | 5000 (hardcoded) |
-| Bind host | `_server_bind()` reads `HR_HOST` (default `127.0.0.1`) and `HR_DEBUG` for the no-pywebview path only; the desktop window always binds loopback. `run_server.bat` sets `HR_HOST=0.0.0.0` so the LAN can reach it — a deliberate user choice, knowing the API has **no authentication** and anyone on the network can edit or wipe every record. **Invariant:** debug is forced off whenever the host is not loopback — the Werkzeug debugger runs arbitrary Python, so debug + LAN is remote code execution. `run.bat` / `run_browser.bat` never set `HR_HOST` |
+| Bind host | `_server_bind()` reads `HR_HOST` (default `127.0.0.1`) and `HR_DEBUG` for the no-pywebview path only; the desktop window always binds loopback. `run_server.bat` sets `HR_HOST=0.0.0.0` so the LAN can reach it. **Invariant:** debug is forced off whenever the host is not loopback — the Werkzeug debugger runs arbitrary Python, so debug + LAN is remote code execution. `run.bat` / `run_browser.bat` never set `HR_HOST` |
+| Authentication | `require_login` is a `before_request` hook, **not** a decorator per route: a decorator you forget leaves the new route open and silent, a hook leaves it closed and makes opening one a visible line in `PUBLIC_ENDPOINTS` (`login`, `static` — nothing else). **Invariant:** no exemption for loopback (behind a reverse proxy `remote_addr` becomes `127.0.0.1` for everyone at once) and none for an empty `users` table (that would reopen the door on every restore of the wrong backup — it is a message on the login page instead). The gate also 404s `static/uploads/*`: the PDFs sit under `static/` by accident of layout, and the app only ever links to `/api/attachments/<id>`. Rationale: [docs/adr/0004](docs/adr/0004-the-security-boundary-is-the-office-lan.md) |
+| Session | Row in `sessions` + a `secrets.token_urlsafe(32)` cookie, **not** `flask.session`. No `SECRET_KEY` exists anywhere — `app.secret_key` must stay `None` — and logout/disable/password-change revoke for real. 12 h, or 30 days with "remember me"; expiry slides only when under half the window is left, so one session is written at most once per 6 h instead of taking the write lock on every request. Cookie is `HttpOnly` + `SameSite=Lax` + **not** `Secure` (plain HTTP on the LAN). `SameSite=Lax` is the only CSRF defence in the system — there is no CSRF token, so never change it to `None`. Rationale: [docs/adr/0003](docs/adr/0003-sessions-live-on-the-server-not-in-a-signed-cookie.md) |
+| Roles | `admin` / `staff`, one TEXT column with a `CHECK` constraint so a typo like `Admin` cannot sit in the DB passing every "not an admin" test (SQLite cannot add a CHECK later). `staff` does all day-to-day work; `admin` additionally gets `DELETE /api/records`. **Invariant:** wiping all records must never touch `users` or `sessions` — whoever pressed it would lock themselves out permanently. Hiding the button in the template is tidiness; `require_admin` is the enforcement |
+| Accounts | `manage_users.py` on the server console only — `add` / `list` / `passwd` / `role` / `disable` / `enable` / `logout-all`. **No delete command:** a reused username makes two people indistinguishable in the log, so retired accounts are disabled, which also cuts their sessions immediately. Password policy is length only (≥ 8); scrypt via `werkzeug.security`, which is why `werkzeug==3.1.9` is now pinned explicitly instead of riding along with Flask |
+| Audit | One `log.info` line per mutation carrying the username, into the existing `hr_promotion.log`. No `audit` table: a table with no screen is a table nobody reads, and it would drag in questions (who may read it, may it be deleted, how is it backed up) that are not worth answering yet. Accepted limit: it rotates away at 1 MB × 3 and is only readable on the server machine |
+| Comparable time | `ts_now()` / `ts_after()` return `YYYY-MM-DD HH:MM:SS` and are **not** interchangeable with `now_str()`. `dd/mm/YYYY` sorts `02/01/2026` before `31/12/2025`, so any column answering "has this expired" (`sessions.expires_at`, `users.locked_until`) must use the former |
 
 ## DB Schema
 
@@ -129,6 +155,28 @@ from a `SELECT` before it. A separate `SELECT` runs in the request's own snapsho
 write lock, so concurrent uploads to one slot all read the same old name and the files the losers
 displaced are never deleted. Measured before the fix: 4 concurrent uploads left 2 orphans, 8 left 5.
 
+### `users` / `sessions`
+
+```
+users:    id, username (UNIQUE, lowercased), password_hash, role (CHECK admin|staff),
+          is_active, failed_count, locked_until, created, updated
+sessions: token (PK), user_id (→ users.id ON DELETE CASCADE), expires_at, remember, created
+          + INDEX idx_sessions_user ON sessions(user_id)
+```
+
+**Invariant:** no foreign key from `users` to `records`. The person who logs in and the person
+being evaluated are different things even when they are the same human — deleting a record must
+never touch an account, and disabling an account must never touch a record.
+
+`idx_sessions_user` is not an index "just in case": revoking every session of one user happens on
+`logout-all`, password change and disable, and all three look up by `user_id`, which the primary
+key on `token` cannot serve. Usernames are ASCII-only (`a-z 0-9 . _ -`, 3–32) because they land in
+the audit log and are reserved forever; allowing non-ASCII would admit a Cyrillic `аdmin` that no
+one can tell from the Latin one by eye.
+
+Both tables are created by `init_db()`, so an upgraded DB gets them empty and **nobody can open
+the app until `manage_users.py add` runs** — intended, not a bug.
+
 ## Key Functions
 
 | Function | Purpose |
@@ -142,6 +190,11 @@ displaced are never deleted. Measured before the fix: 4 concurrent uploads left 
 | `_dedupe_attachment_slots(con)` | Keep the highest `id` per `(record_id, book_no)` and return the displaced files for deletion after commit. Runs before `CREATE UNIQUE INDEX`, because an older DB can already hold duplicates and the index would otherwise raise inside `init_db()`, which stops the app from opening at all |
 | `fail(context, message, status)` | Log the live exception with `log.exception`, return a fixed Thai message. **Call only from inside an `except` block** — `log.exception` reads `sys.exc_info()`, so outside one it records `NoneType: None`. Statuses stay per-route: 422 for an integrity violation in `add_record`, 404 for a record that vanished mid-upload |
 | `_setup_logging()` | Attach the rotating file handler. Called from `main()`, never at import |
+| `authenticate(con, user, pw)` | Return `(user_row, reason)`. The reason is for the **log only** — the client sees one message for every failure, or the login page becomes a way to ask which accounts exist. An unknown username is still checked against a throwaway hash so the reply does not come back visibly faster. Counts failures and locks the account for 5 minutes after 5, never permanently: a permanent lock hands anyone a way to keep a colleague out all day by typing a wrong password five times |
+| `resolve_session(con, token)` | Token → user row, `None` for every unusable case (absent, expired, disabled). Deletes the expired row and revokes a disabled user's sessions on the way. Slides the expiry only when under half the window is left |
+| `set_password` / `set_active` / `revoke_sessions` | All take `con` and **do not commit** — the caller owns the transaction so "new password + old sessions gone" is one atomic step. `set_password` deliberately does not revoke: the caller decides, because a user changing their own password must not be kicked off the machine they are typing on, while an admin reset must clear every machine |
+| `audit(action, detail)` | One `log.info` line naming the logged-in user |
+| `_safe_next(target)` | Keep `?next=` to a local path. `//host` borrows the current scheme and would turn our login page into a redirector to someone else's site |
 | `_safe_remove(path)` | Delete file, swallow errors |
 | `_stored_path(stored_name)` | `UPLOAD_FOLDER / stored_name` |
 | `init_db()` | Create tables + additive ALTER TABLE migrations |
@@ -149,14 +202,21 @@ displaced are never deleted. Measured before the fix: 4 concurrent uploads left 
 
 ## API Routes
 
+Every route below needs a session. `/api/*` answers **401 + a Thai message** when there is none
+(never an empty list — that would report "0 records" while SQLite holds them); page routes
+redirect to `/login?next=…`.
+
 | Method | URL | Description |
 |---|---|---|
+| GET/POST | `/login` | Login form / check credentials. Public. Plain form post, no JS |
+| POST | `/logout` | Delete this session row. POST so a stray link cannot sign people out |
+| GET/POST | `/change-password` | Own password, requires the current one, revokes every other session |
 | GET | `/api/records` | All records (ORDER BY id DESC) |
 | GET | `/api/records/<id>` | Single record |
 | POST | `/api/records` | Create record |
 | PUT | `/api/records/<id>` | Update record |
 | DELETE | `/api/records/<id>` | Delete record + cascade attachments + disk files |
-| DELETE | `/api/records` | Delete ALL records |
+| DELETE | `/api/records` | Delete ALL records — **`admin` only**, 403 for `staff`. Never touches `users` / `sessions` |
 | GET | `/api/records/<id>/attachments` | List attachments for record |
 | POST | `/api/records/<id>/attachments` | Upload PDF (base64 JSON or multipart) — 400 not a PDF/empty/`book_no` outside `BOOK_SLOTS`, 404 no such record, 413 over 100 MB |
 | GET | `/api/attachments/<att_id>` | Download PDF |
@@ -167,6 +227,9 @@ displaced are never deleted. Measured before the fix: 4 concurrent uploads left 
 
 ## Utilities
 
+- [manage_users.py](manage_users.py) — the only way to create or change an account. Backs the DB
+  up before `init_db()`, same order as `main()`, because it may be the first thing run after an
+  upgrade. Passwords come from a prompt, never from `argv` (shell history, process list)
 - [check_db.py](check_db.py) — inspect DB state
 - [fix_db.py](fix_db.py) — manual DB repair
 - [tests/](tests/) — pytest suite (`conftest.py` holds the temp-DB fixtures)

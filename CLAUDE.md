@@ -13,7 +13,7 @@ python app.py        # pywebview window (or browser fallback on http://127.0.0.1
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                      # 118 tests, ~3s    — backend
+python -m pytest                      # 124 tests, ~3s    — backend
 node --test tests/client.test.mjs     # 14 tests, ~0.3s   — frontend
 ```
 
@@ -83,6 +83,7 @@ Single-file backend: [app.py](app.py)
 | Thai JSON | `app.json.ensure_ascii = False` — required everywhere. **Not** `app.config['JSON_AS_ASCII']`: Flask ≥ 2.3 ignores that key silently, which escapes Thai to `\uXXXX` and grows the payload ~23% |
 | BASE_DIR | Resolves for both `python app.py` and PyInstaller `.exe` via `sys.executable` check |
 | Port | 5000 (hardcoded) |
+| Bind host | `_server_bind()` reads `HR_HOST` (default `127.0.0.1`) and `HR_DEBUG` for the no-pywebview path only; the desktop window always binds loopback. `run_server.bat` sets `HR_HOST=0.0.0.0` so the LAN can reach it — a deliberate user choice, knowing the API has **no authentication** and anyone on the network can edit or wipe every record. **Invariant:** debug is forced off whenever the host is not loopback — the Werkzeug debugger runs arbitrary Python, so debug + LAN is remote code execution. `run.bat` / `run_browser.bat` never set `HR_HOST` |
 
 ## DB Schema
 

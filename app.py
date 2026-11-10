@@ -1363,6 +1363,32 @@ def run_flask():
     """
     app.run(host='127.0.0.1', port=PORT, debug=False, use_reloader=False)
 
+LOOPBACK_HOSTS = ('127.0.0.1', 'localhost', '::1')
+
+
+def _server_bind():
+    """
+    เลือก host และ debug ของโหมด fallback จาก environment
+
+    HR_HOST ไม่ตั้ง = 127.0.0.1 รับเฉพาะเครื่องตัวเอง ตั้ง HR_HOST=0.0.0.0 = เปิดให้ทุกเครื่อง
+    ในเครือข่ายเข้าได้ ผู้ใช้เลือกเปิดเองโดยรู้ว่า API ไม่มี authentication เลย ใครเข้าถึง
+    port ได้ก็อ่าน แก้ และลบข้อมูล HR ได้ทั้งหมด รวมถึง DELETE /api/records ที่ลบทุกแถว
+
+    debug เปิดได้ด้วย HR_DEBUG=1 แต่ถูกบังคับปิดเมื่อ host ไม่ใช่ loopback เพราะ Werkzeug
+    debugger มีคอนโซลรัน Python ได้ เปิดคู่กับ LAN เท่ากับให้ทุกเครื่องรันโค้ดบนเครื่องนี้ได้
+    ความเสี่ยงนั้นหนักกว่าข้อมูลรั่ว และไม่มีใครตั้งใจเลือกมัน
+
+    Returns:
+        tuple[str, bool]: (host, debug)
+    """
+    host = os.environ.get('HR_HOST', '').strip() or '127.0.0.1'
+    debug = os.environ.get('HR_DEBUG') == '1'
+    if debug and host not in LOOPBACK_HOSTS:
+        log.warning('ปิด HR_DEBUG เพราะ HR_HOST=%s เปิดให้เครื่องอื่นเข้าถึง', host)
+        debug = False
+    return host, debug
+
+
 def main():
     """
     Entry point ของแอป — เตรียม DB แล้วเลือกโหมดการรันตาม environment
@@ -1376,10 +1402,9 @@ def main():
     ขึ้นกับเครื่องผู้ใช้ ไม่ใช่ค่าที่เดาไว้ล่วงหน้าได้
 
     โหมด fallback (ไม่มี pywebview เช่น รันบนเครื่อง dev):
-    รันเป็น web server ปกติให้เปิดผ่านเบราว์เซอร์ ผูกที่ 127.0.0.1 เท่านั้นเหมือนโหมด desktop
-    เพราะ API ไม่มี authentication เลย ถ้าผูก 0.0.0.0 ทุกเครื่องในเครือข่ายจะอ่านและลบข้อมูล HR ได้
-    debug ปิดเป็นค่าเริ่มต้น เปิดได้ด้วย HR_DEBUG=1 สำหรับตอน dev เท่านั้น เพราะ Werkzeug debugger
-    มีคอนโซลรัน Python ได้ ซึ่งเท่ากับเปิดทาง RCE ถ้าหลุดออกไปอยู่บนเครื่องผู้ใช้
+    รันเป็น web server ปกติให้เปิดผ่านเบราว์เซอร์ host และ debug มาจาก _server_bind()
+    ค่าเริ่มต้นผูก 127.0.0.1 เหมือนโหมด desktop การเปิดให้ LAN ต้องตั้ง HR_HOST เอง
+    (run_server.bat ทำให้) ดูเหตุผลและข้อจำกัดที่ _server_bind()
 
     Returns:
         None
@@ -1404,8 +1429,15 @@ def main():
         )
         webview.start(debug=False)
     else:
-        print(f'[HR System] เปิด http://127.0.0.1:{PORT}  (Ctrl+C เพื่อหยุด)')
-        app.run(host='127.0.0.1', port=PORT, debug=os.environ.get('HR_DEBUG') == '1')
+        host, debug = _server_bind()
+        if host in LOOPBACK_HOSTS:
+            print(f'[HR System] เปิด http://127.0.0.1:{PORT}  (Ctrl+C เพื่อหยุด)')
+        else:
+            log.warning('เปิดให้เครื่องอื่นเข้าถึงได้ที่ %s:%d — ไม่มีการล็อกอิน', host, PORT)
+            print(f'[HR System] เปิดให้เครื่องอื่นในเครือข่ายเข้าได้ ({host}:{PORT})')
+            print(f'[HR System] เครื่องอื่นเปิด http://<IP ของเครื่องนี้>:{PORT}  (ดู IP ด้วย ipconfig)')
+            print('[HR System] คำเตือน: ไม่มีการล็อกอิน ทุกเครื่องในเครือข่ายอ่าน แก้ และลบข้อมูลได้')
+        app.run(host=host, port=PORT, debug=debug)
 
 if __name__ == '__main__':
     main()

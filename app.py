@@ -2145,6 +2145,563 @@ def delete_all():
 
 
 # ────────────────────────────────────────────────
+# Routes — จัดการผู้ใช้งาน
+#
+# ไม่มี decorator ไหนเลย: require_login เป็น before_request hook ทุก route จึงปิดอยู่
+# แล้ว และ /api/users* ถูก test_every_route_is_closed_without_a_session ลงทะเบียนให้ฟรี
+# เพราะเทสต์นั้นเดิน url_map ไม่ใช่รายการที่เขียนมือ
+#
+# ทั้งสี่ route เริ่มด้วย acting_on() บรรทัดเดียว ซึ่งเป็นที่เดียวที่ connection,
+# เป้าหมาย, การตรวจสิทธิ์, transaction และการปิดเกิดขึ้น — ตรวจด้วยตาได้ว่าไม่มี
+# route ไหนลืม
+# ────────────────────────────────────────────────
+
+USERS_API = '/api/users'
+
+NO_SUCH_USER_MSG = 'ไม่พบบัญชีผู้ใช้ที่ต้องการ'
+BAD_FIELD_MSG    = 'ฟิลด์ที่ส่งมาไม่ถูกต้อง'
+# ตรงกับข้อความของ add_record แบบตัวต่อตัว ไม่ใช่ข้อความใหม่ที่แปลว่าเรื่องเดียวกัน
+BAD_JSON_MSG     = 'ข้อมูลที่ส่งมาไม่ถูกต้อง'
+LAST_ADMIN_MSG   = 'ต้องเหลือผู้ดูแลระบบที่ใช้งานได้อย่างน้อยหนึ่งบัญชี'
+
+
+class UserRequestRefused(Exception):
+    """
+    คำปฏิเสธหนึ่งครั้งของแท็บจัดการผู้ใช้งาน — พา status, ข้อความไทย และบรรทัด log มาด้วย
+
+    เป็น exception ไม่ใช่ค่าที่ return เพราะค่าที่ return ลืมเช็คได้ แล้ว route นั้นจะ
+    อนุญาตทุกอย่างเงียบ ๆ ส่วน exception ลืมไม่ได้ และทำให้ body ของคำปฏิเสธกับบรรทัด
+    audit มีที่เกิดที่เดียว (ดู _handle_refusal) แทนที่จะถูกคัดลอกไปทุก route แล้ว
+    อันที่สี่ลืม audit
+
+    ครอบทุก status ที่เป็น "คำขอนี้ไม่ได้รับอนุญาตให้เกิดผล": 403 สิทธิ์ไม่ถึง,
+    404 ไม่มีบัญชีนั้น, 409 ชนกับสถานะที่มีอยู่, 422 ค่าที่ส่งมาใช้ไม่ได้
+
+    **ไม่ใช่ sqlite3.Error** จึงไม่ถูก `except sqlite3.Error` ของ route กลืน — มันลอด
+    ไปถึง errorhandler ซึ่งเป็นเหตุผลที่ route พวกนี้จับ sqlite3.Error แคบ ๆ ไม่ใช่
+    `except Exception` แบบ route ของ records (ซึ่งกว้างเพราะต้องครอบ file I/O ของ
+    ไฟล์แนบด้วย — แท็บนี้ไม่แตะดิสก์เลย)
+    """
+
+    def __init__(self, status: int, message: str, detail: str = ''):
+        super().__init__(message)
+        self.status, self.message, self.detail = status, message, detail
+
+
+@app.errorhandler(UserRequestRefused)
+def _handle_refusal(e):
+    """
+    ที่เกิดที่เดียวของทั้ง body และบรรทัด log ของทุกคำปฏิเสธในแท็บนี้
+
+    เขียน audit ให้ฟรีแบบเดียวกับที่ require_admin เขียนให้ `detail` บอกว่าอะไรถูก
+    ปฏิเสธและทำไม ส่วน `message` คือสิ่งเดียวที่ client เห็น และเป็นข้อความคงที่เสมอ
+    ไม่เคยมีค่าที่ client ส่งมาประกอบอยู่ข้างใน
+    """
+    audit('refused', f'{e.status} {request.method} {request.path} {e.detail}')
+    return jsonify({'error': e.message}), e.status
+
+
+def actor_now() -> Account:
+    """
+    g.user → Account ที่ขอบ — บรรทัดเดียวที่ทำให้ permission_problem ไม่ต้องรู้จัก Flask
+
+    g.user ใช้คีย์ 'user_id' ไม่ใช่ 'id' (resolve_session เลือกเป็น u.id AS user_id)
+    กับดักนี้ถูกดักที่นี่ที่เดียว
+
+    Returns:
+        Account: ตัวตนของคนที่กำลังยิง request นี้
+    """
+    return Account(g.user['user_id'], g.user['role'])
+
+
+def json_object_body():
+    """
+    body ของ request ที่เปลี่ยนข้อมูลในแท็บนี้ — รับ application/json เท่านั้น
+
+    SameSite=Lax เป็นเกราะ CSRF ตัวเดียวของระบบและไม่มี CSRF token (docs/adr/0004)
+    ช่องที่มันกันไม่ได้คือ form POST ข้ามเว็บ (เว็บอื่นสั่งเบราว์เซอร์ของคนในสำนักงาน
+    ยิง multipart หรือ urlencoded มาได้โดยไม่ต้องขออนุญาตก่อน) route พวกนี้จึงต้อง
+    ไม่เคยอ่าน request.form — get_json(silent=True) คืน None ให้ทุก content-type อื่น
+
+    Returns:
+        dict | None: body ที่เป็น JSON object จริง หรือ None (ผู้เรียกตอบ 400)
+    """
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else None
+
+
+# ── ช่องที่ PATCH แก้ได้ ───────────────────────────────────────────
+#
+# normalize — ทำค่าที่รับมาให้เป็นมาตรฐานก่อนเทียบ ไม่งั้น 'สมชาย  ใจดี' (ช่องว่าง
+#             สองตัว) จะนับเป็นการเปลี่ยนชื่อทุกครั้งที่กดบันทึก แล้ว updated จะขยับ
+#             โดยที่ไม่มีอะไรเปลี่ยน
+# current   — ค่าปัจจุบันของช่องนั้นในแถว users ในรูปที่เทียบกับค่าใหม่ได้ (is_active
+#             เก็บเป็น 0/1 INTEGER ฝั่ง JSON เป็น boolean)
+# problem   — ด่านตรวจค่าใหม่ คืนข้อความ 422 หรือ ''
+# write     — ตัวที่เขียนลง DB (ไม่ commit ผู้เรียกเป็นเจ้าของ transaction)
+UserField = namedtuple('UserField', 'normalize current problem write')
+
+USER_FIELDS = {
+    'display_name': UserField(normalize_account_name,
+                              lambda row: row['display_name'] or '',
+                              account_name_problem, set_display_name),
+    'role':         UserField(lambda v: v,
+                              lambda row: row['role'],
+                              role_problem, set_role),
+    'is_active':    UserField(lambda v: v,
+                              lambda row: bool(row['is_active']),
+                              active_problem, set_active),
+}
+
+# action ที่กั้นแต่ละช่อง derive มาจาก USER_ACTIONS ไม่ใช่รายการคู่ขนาน
+FIELD_ACTIONS = {r.field: a for a, r in USER_ACTIONS.items() if r.field}
+
+
+def user_changes(body: dict, target) -> dict:
+    """
+    คืนเฉพาะช่องที่ค่าใหม่ "ต่างจากของเดิมจริง" (ฟังก์ชันบริสุทธิ์)
+
+    นี่คือหัวใจของการมี PATCH ตัวเดียวแทนสาม route การ diff ฝั่ง server ให้ผลสามอย่าง
+    ที่ไม่ได้มาฟรีจากที่อื่น:
+
+      1. ฟอร์มส่งมาทั้งชุดได้ทุกครั้ง การส่ง role ที่ไม่ได้แก้มาด้วยไม่นับเป็น
+         "การเปลี่ยนบทบาท" จึงไม่ถูกปฏิเสธ 403 แปลว่าฝั่ง client **ไม่ต้องมี** ตรรกะ
+         ว่าช่องไหนเปลี่ยน ซึ่งเป็นที่ที่ตรรกะนั้นจะเขียนผิด
+      2. ยิงซ้ำสองครั้งได้ผลเท่ากัน ครั้งที่สองคืน changed=[] พร้อม 200 ไม่ใช่ error
+      3. บรรทัด audit บอกสิ่งที่เปลี่ยนจริง ไม่ใช่สิ่งที่ถูกส่งมา
+
+    ลำดับของผลลัพธ์ตาม USER_FIELDS จึงคงที่ข้าม request บรรทัด audit ของการแก้ชุด
+    เดียวกันอ่านเหมือนกันทุกครั้ง
+
+    Parameters:
+        body (dict): JSON body ที่ตรวจแล้วว่าไม่มีคีย์แปลกปลอม
+        target: แถวปัจจุบันใน users (จาก get_user)
+
+    Returns:
+        dict: {ชื่อช่อง: ค่าใหม่ที่ normalize แล้ว} เฉพาะที่ต่างจริง ({} = ไม่มีอะไรเปลี่ยน)
+    """
+    out = {}
+    for field, spec in USER_FIELDS.items():
+        if field not in body:
+            continue
+        new = spec.normalize(body[field])
+        if new != spec.current(target):
+            out[field] = new
+    return out
+
+
+def changes_problem(changes: dict) -> str:
+    """
+    ตรวจค่าใหม่ทุกตัวใน changes แล้วคืนปัญหาตัวแรกที่เจอ (ฟังก์ชันบริสุทธิ์)
+
+    ตรวจแค่สิ่งที่เปลี่ยน ไม่ตรวจสิ่งที่ส่งมา: แถวเก่าที่มีชื่อยาวเกินเพดานปัจจุบัน
+    (จากตอนที่เพดานยังสูงกว่านี้) ต้องแก้บทบาทได้โดยไม่ถูกบังคับให้แก้ชื่อก่อน
+    ข้อมูลเดิมที่ไม่ผ่านกฎใหม่ไม่ควรกลายเป็นบัญชีที่แก้อะไรไม่ได้เลย
+
+    Parameters:
+        changes (dict): ผลจาก user_changes()
+
+    Returns:
+        str: ข้อความ 422 ตัวแรกที่เจอ หรือ '' ถ้าผ่านทั้งหมด
+    """
+    for field, value in changes.items():
+        problem = USER_FIELDS[field].problem(value)
+        if problem:
+            return problem
+    return ''
+
+
+def _patch_plan(body: dict):
+    """
+    คืนฟังก์ชันที่บอกว่า PATCH body นี้แปลว่า action อะไรบ้าง เมื่อเทียบกับแถวเป้าหมาย
+
+    acting_on ต้องรู้ชุด action **ก่อน** เขียนอะไรลง DB แต่ชุดนั้นขึ้นกับว่าอะไร
+    เปลี่ยนจริง ซึ่งรู้ได้หลังอ่านแถวเป้าหมายมาแล้ว การส่งแผนเป็นฟังก์ชันของแถว
+    เป้าหมายจึงทำให้การตรวจสิทธิ์ของทุกช่องที่เปลี่ยนเกิดก่อนการเขียนครั้งแรก
+    การแก้ที่อนุญาตบางช่องจึงถูกปฏิเสธทั้งก้อน ไม่ใช่เขียนครึ่งหนึ่งแล้วค่อยล้ม
+
+    ด่านรูปร่างข้อมูล (changes_problem) อยู่ที่นี่ **ก่อน** การตรวจสิทธิ์ เพราะ
+    permission_problem มีเงื่อนไขว่า new_role ต้องอยู่ใน ROLES แล้ว ถ้าปล่อย
+    {"role": "manager"} ผ่านไป ROLE_RANK จะ KeyError แล้วคำตอบกลายเป็น 500 ทั้งที่
+    ความจริงคือ body ผิดรูป (422) ผลข้างเคียงที่ยอมรับ: ค่าที่ใช้ไม่ได้ได้ 422
+    ไม่ว่าคนส่งจะมีสิทธิ์แก้บัญชีนั้นหรือไม่ ซึ่งไม่ได้บอกอะไรที่ client ไม่รู้อยู่แล้ว
+
+    Parameters:
+        body (dict): JSON body ที่ตรวจคีย์แล้ว
+
+    Returns:
+        function: รับแถวใน users คืน {action: บทบาทที่มอบ | None}
+    """
+    def plan(target):
+        changes = user_changes(body, target)
+        problem = changes_problem(changes)
+        if problem:
+            raise UserRequestRefused(422, problem, 'ค่าที่ส่งมาใช้ไม่ได้')
+        return {FIELD_ACTIONS[f]: (v if USER_ACTIONS[FIELD_ACTIONS[f]].grants_role else None)
+                for f, v in changes.items()}
+    return plan
+
+
+def _active_admin_count(con) -> int:
+    """
+    จำนวนบัญชีผู้ดูแลระบบที่ยังใช้งานได้ — ตัวเลขเดียวที่ acting_on ใช้กันการล็อกตัวเองออก
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+
+    Returns:
+        int
+    """
+    return con.execute('SELECT COUNT(*) FROM users WHERE role=? AND is_active=1',
+                       (ROLE_ADMIN,)).fetchone()[0]
+
+
+@contextmanager
+def acting_on(actions, uid: int = None, new_role: str = None):
+    """
+    เปิดงานหนึ่งชิ้นบนตาราง users — connection, เป้าหมาย, การตรวจสิทธิ์, transaction
+
+    บรรทัดเดียวที่ route เขียนครอบสิบเรื่อง: เปิด connection, อ่านแถวเป้าหมาย,
+    404 เมื่อไม่มี, ตรวจอันดับสิทธิ์ของทุก action ที่ request นี้แปลว่าจะทำ,
+    ตรวจการทำกับบัญชีตัวเอง, body ของคำปฏิเสธ, บรรทัด audit ของคำปฏิเสธ,
+    กฎ "ต้องเหลือแอดมินหนึ่งคน", commit, rollback และ close ใน finally
+
+    ผลพลอยได้สี่ข้อที่เป็นเหตุผลหลักที่มันเป็น context manager ไม่ใช่ helper:
+
+      1. **อะตอม** — "ตั้งรหัสใหม่ + ไล่เซสชันเก่าออก" และ "เปลี่ยนชื่อ + เปลี่ยน
+         บทบาท" อยู่ใน commit เดียว ตามสัญญาของบล็อก primitives ทั้งก้อน
+      2. **audit หลัง commit** — __exit__ commit แล้ว route ค่อยเรียก audit() ต่อจาก
+         บล็อก with ลำดับที่บ้านนี้บังคับจึงถูกโดยโครงสร้าง ไม่ใช่เพราะจำได้
+      3. **ไม่มี TOCTOU** — แถวเป้าหมายถูกอ่านด้วย connection เดียวกับที่เขียน ใน
+         transaction เดียวกัน การอ่าน role ไว้ก่อนแล้วเขียนทีหลังด้วยอีก connection
+         เปิดช่องให้บัญชีเลื่อนเป็น admin ระหว่างสองจังหวะ
+      4. **จุดปิดเดียว** — connection ถูกปิดที่ finally ตัวเดียวของทั้งสี่ route
+         ไม่ใช่ `finally: con.close()` ที่ถูกคัดลอกไปวางสี่ครั้ง (ไฟล์นี้เคยเสียท่า
+         กับการคัดลอกนั้นมาแล้วครั้งหนึ่ง — ดูคอมเมนต์ที่ READ_ROUTES ใน test_api.py)
+      5. **กฎ "ต้องเหลือแอดมินที่ใช้งานได้หนึ่งคน" ครอบทุก route พร้อมกัน** กฎ
+         "ห้ามปิดบัญชีตัวเอง" กับ "ห้ามลดบทบาทตัวเอง" เพียงพอถ้าทำทีละคำสั่ง แต่ไม่
+         เพียงพอเมื่อเกิดพร้อมกัน: แอดมินสองคนปิดบัญชีกันเองคนละ request ทั้งคู่ผ่าน
+         การเช็คของตัวเอง ไม่มีใครนับจำนวนแอดมิน แล้วทั้งคู่ commit ระบบเหลือแอดมิน
+         ที่ใช้งานได้ศูนย์บัญชีและไม่มีทางกลับนอกจากไปพิมพ์ที่เครื่องเซิร์ฟเวอร์
+         (การลดบทบาทเป็นเรื่องเดียวกัน เพราะ resolve_session อ่าน role สด ๆ ทุก
+         request) การนับ **หลัง** เขียนอยู่ใน write lock ของ SQLite แล้ว คนที่สองจึง
+         เห็นผลของคนแรกและถอยเอง ซึ่งเป็นสิ่งที่การนับก่อนเขียนทำไม่ได้
+
+    Parameters:
+        actions: คีย์ใน USER_ACTIONS หนึ่งตัว **หรือ** ฟังก์ชันที่รับแถวเป้าหมายแล้ว
+                 คืน {action: บทบาทที่มอบ | None} สำหรับ request ที่ชุด action ขึ้นกับ
+                 สิ่งที่เปลี่ยนจริง (ดู _patch_plan) ชุดว่างแปลว่าไม่มีอะไรจะทำ
+                 ซึ่งถูกต้อง ไม่ใช่ข้อผิดพลาด
+        uid (int | None):      id ของบัญชีเป้าหมาย ต้องมีเมื่อ rule.needs_target
+        new_role (str | None): บทบาทที่มอบ ตรวจรูปแบบด้วย role_problem มาแล้ว
+
+    Yields:
+        tuple[sqlite3.Connection, sqlite3.Row | None]: (con ที่ยังไม่ commit, แถวเป้าหมาย)
+
+    Raises:
+        UserRequestRefused: 404 ไม่มีบัญชีนั้น / 403 สิทธิ์ไม่ถึง / 409 แอดมินคนสุดท้าย
+        sqlite3.Error:      ความล้มของ DB — route แปลเป็น fail() ของตัวเอง
+        ValueError:         route ไม่ได้ส่ง uid หรือ new_role ที่ action นั้นต้องมี (บั๊ก)
+    """
+    plan = actions if callable(actions) else (lambda _row: {actions: new_role})
+    actor = actor_now()
+    con = get_db()
+    try:
+        target = None
+        if uid is not None:
+            target = get_user(con, uid)
+            if target is None:
+                raise UserRequestRefused(404, NO_SUCH_USER_MSG, f'id={uid}')
+
+        for action, granting in plan(target).items():
+            rule = USER_ACTIONS[action]
+            if rule.needs_target and target is None:
+                raise ValueError(f'{action} ต้องมี uid')
+            if rule.grants_role and granting is None:
+                raise ValueError(f'{action} ต้องระบุบทบาทที่มอบ')
+            problem = permission_problem(
+                actor, action,
+                Account(target['id'], target['role']) if target else None, granting)
+            if problem:
+                raise UserRequestRefused(403, problem, f'{action} id={uid}')
+
+        # จำนวนแอดมิน "ก่อน" ไม่ใช่ด่านความปลอดภัย — มันอ่านจาก snapshot ของ request
+        # ตัวเอง ซึ่งถ่ายไว้ก่อนได้ write lock สอง request ที่แข่งกันจึงเห็นเลขเดียวกัน
+        # ทั้งคู่ หน้าที่ของมันคือตอบว่า "การเขียนครั้งนี้เป็นตัวที่ทำให้เหลือศูนย์
+        # หรือเปล่า" DB ที่ไม่มีแอดมินที่ใช้งานได้อยู่ก่อนแล้ว (restore backup ผิดไฟล์
+        # หรือใครไปปิดบัญชีด้วย CLI) ต้องยังแก้ชื่อบัญชีอื่นได้ตามปกติ
+        admins_before = _active_admin_count(con) if target is not None else 0
+        changed_before = con.total_changes
+
+        yield con, target
+
+        # นับเฉพาะ request ที่เขียนจริง — GET กับ PATCH ที่ไม่มีอะไรเปลี่ยนไม่ต้องจ่าย
+        # query เพิ่มเพื่อตอบคำถามที่คำตอบเปลี่ยนไม่ได้
+        if admins_before and con.total_changes != changed_before \
+                and not _active_admin_count(con):
+            raise UserRequestRefused(409, LAST_ADMIN_MSG,
+                                     'จะไม่เหลือผู้ดูแลระบบที่ใช้งานได้')
+        con.commit()
+    except BaseException:
+        try:
+            con.rollback()
+        except Exception:
+            # rollback ที่ล้มเอง (connection พังไปแล้ว) ต้องไม่บังความผิดพลาดต้นเรื่อง
+            # ซึ่งเป็นสิ่งเดียวที่บอกได้ว่าเกิดอะไรขึ้นจริง
+            pass
+        raise
+    finally:
+        con.close()
+
+
+def account_payload(row, actor: Account, now: str) -> dict:
+    """
+    แถวหนึ่งในตาราง users → object ที่หน้าจอใช้ได้ทันที (whitelist ไม่ใช่ row_to_dict)
+
+    เป็น whitelist โดยตั้งใจ ต่างจาก row_to_dict ที่ records ใช้ สิ่งที่ **ไม่** ข้ามไป
+    และเหตุผลของแต่ละตัว:
+      password_hash  list_users ไม่ SELECT มาตั้งแต่ต้น
+      failed_count   ตัวนับภายใน บอก client ไปก็ทำอะไรไม่ได้
+      locked_until   รูปแบบภายใน (ts_now) ถ้าส่งไป การเทียบว่า "หมดอายุยัง" จะต้องถูก
+                     เขียนเป็นภาษาที่สองฝั่ง JS จึงส่ง `status` ที่ account_status
+                     คิดเสร็จแล้วไปให้ แทนที่จะส่งวัตถุดิบไปให้คิดเอง
+
+    `name` เดินทางไปพร้อม `display_name` โดยตั้งใจ ไม่ใช่ของซ้ำ:
+      display_name = คอลัมน์ดิบ ฟอร์มแก้ไขต้องเติมค่านี้ ('' ต้องเป็น '' จริง ๆ ไม่ใช่
+                     ชื่อผู้ใช้ ไม่งั้นผู้ใช้จะกดบันทึกแล้วได้ชื่อผู้ใช้กลายเป็นชื่อ
+                     ตัวเองไปโดยไม่ได้ตั้งใจ)
+      name         = ค่าที่หน้าจอแสดงและใช้เรียง กฎ fallback ไป username อยู่ที่นี่
+                     ที่เดียว ฝั่ง client ไม่ต้องเขียน `|| username` ที่ไหนเลย และคีย์
+                     ที่ใช้เรียงจึงเป็นค่าเดียวกับตัวหนังสือที่เห็น
+
+    `can` คือรายชื่อ action ที่ actor คนนี้ทำกับแถวนี้ได้ มาจาก permission_problem
+    ตัวเดียวกับที่ route ใช้บังคับจริง ปุ่มบนหน้าจอจึงเป็นผลของกฎ ไม่ใช่สำเนาที่สอง
+    ของกฎ (ฝั่ง client ไม่มีการเทียบบทบาทแม้แต่ที่เดียว) วนบน TARGET_ACTIONS ที่
+    derive มาจาก USER_ACTIONS จึงไม่มีรายการที่ต้องเติมตามเมื่อมี action ใหม่
+
+    Parameters:
+        row:            แถวจาก list_users (มีคอลัมน์ live ด้วย)
+        actor (Account): คนที่กำลังดูหน้านี้
+        now (str):      ts_now() ครั้งเดียวของทั้งหน้า (ดู account_status)
+
+    Returns:
+        dict: แถวที่พร้อม jsonify
+    """
+    target = Account(row['id'], row['role'])
+    return {
+        'id':            row['id'],
+        'username':      row['username'],
+        'display_name':  row['display_name'] or '',
+        'name':          (row['display_name'] or '').strip() or row['username'],
+        'role':          row['role'],
+        'status':        account_status(row, now),
+        'live_sessions': row['live'],
+        'created':       sortable_stamp(row['created']),
+        'updated':       sortable_stamp(row['updated']),
+        'is_self':       row['id'] == actor.user_id,
+        # ถาม action ที่มอบบทบาทด้วยบทบาทของ actor เอง ซึ่งคือสิ่งที่สูงสุดที่เขามอบ
+        # ได้ตามกฎอันดับ ("ทำได้ไหม" จึงหมายถึง "มอบอะไรได้บ้างอย่างน้อยหนึ่งอย่าง")
+        # การถามด้วย ROLE_ADMIN ตายตัวจะตอบ "ไม่ได้" ให้บทบาทกลางวันหน้าที่ลดขั้นได้
+        'can':           [a for a in TARGET_ACTIONS
+                          if not permission_problem(
+                              actor, a, target,
+                              actor.role if USER_ACTIONS[a].grants_role else None)],
+    }
+
+
+@app.route(USERS_API, methods=['GET'])
+def get_users():
+    """
+    GET /api/users — ทุกบัญชี พร้อมชุดสิทธิ์ของคนที่กำลังดู
+
+    ไม่มี try/except ตามแบบของ read route ทั้งเจ็ดตัวในไฟล์นี้: DB ล้ม → 500 ของ Flask
+    และ apiFetch ฝั่ง client ตกไปที่ 'HTTP 500' เท่ากับของเดิมทุกตัว การทำให้ route นี้
+    ดีขึ้นเฉพาะตัวคือการทำให้มันเป็นตัวที่ผิดแผก
+
+    ส่ง envelope ไม่ใช่ array เปล่าแบบ /api/records เพราะ "สิทธิ์ของคนที่กำลังดู" ไม่มี
+    ที่อื่นให้อยู่ ทางเลือกคือ endpoint ที่สองหรือสำเนากฎชุดที่สองในภาษา JS
+
+    ไม่มี pagination และไม่เรียงฝั่ง server: จำนวนบัญชีในหน่วยงานหนึ่งอยู่ในระดับสิบ
+    ไม่ใช่พัน เหตุผลเดียวกับ get_all ของ records และหน้าจอได้เรียง แบ่งหน้า ค้นหา
+    ทันทีโดยไม่ต้อง round-trip ต่อการคลิกหัวตารางหนึ่งครั้ง
+
+    ts_now() ถูกเรียกครั้งเดียวสำหรับทั้งหน้า ทุกแถวจึงถูกตัดสินสถานะด้วยเวลาเดียวกัน
+
+    ทุกอย่างที่มีลำดับเดินทางเป็น list ของคู่ ไม่ใช่ dict: app.json.sort_keys เป็น True
+    ลำดับคีย์ใน dict จะถูกเรียงใหม่ตามตัวอักษร แล้วลำดับใน <select> บทบาทจะไม่ใช่
+    ลำดับที่เราตั้งใจ (เหตุผลเต็ม ๆ อยู่ใน docstring ของ index())
+
+    Returns:
+        Response (JSON): 200 {'users', 'self_id', 'can_create', 'grantable_roles',
+                              'role_labels', 'status_labels', 'password_hint'}
+                         401 จากด่าน, 500 เมื่อ DB ล้ม
+    """
+    actor = actor_now()
+    now = ts_now()
+    with acting_on('user.list') as (con, _):
+        rows = list_users(con)
+    return jsonify({
+        'users':    [account_payload(r, actor, now) for r in rows],
+        'self_id':  actor.user_id,
+        'can_create': not permission_problem(actor, 'user.create', new_role=actor.role),
+        # staff จะไม่เห็น 'ผู้ดูแลระบบ' เป็นตัวเลือกเลย และถ้าปลอม body มาก็ถูก
+        # DENY_GRANT_MSG ปฏิเสธอยู่แล้ว — ปุ่มกับด่านอ่านกฎเดียวกัน
+        'grantable_roles': [[r, ROLE_LABELS[r]] for r in ROLES
+                            if not permission_problem(actor, 'user.create', new_role=r)],
+        'role_labels':   list(ROLE_LABELS.items()),
+        'status_labels': list(STATUS_LABELS.items()),
+        # ข้อความใต้ช่องรหัสผ่านคือข้อความเดียวกับที่ server ใช้ปฏิเสธ เลข 8 จึงมีที่
+        # เดียวคือ PASSWORD_MIN_LEN ไม่ใช่สองที่ที่เลื่อนออกจากกันได้
+        'password_hint': password_problem(''),
+    })
+
+
+@app.route(USERS_API, methods=['POST'])
+def create_user_route():
+    """
+    POST /api/users — สร้างบัญชีใหม่
+
+    **ไม่มีการเช็คชื่อซ้ำด้วย SELECT ก่อน** UNIQUE index คือแหล่งเดียวของกฎนี้ และ
+    IntegrityError คือเส้นทางเดียวของคำตอบ: บนเว็บมันเป็น race จริง แอดมินสองคนกด
+    "เพิ่มผู้ใช้งาน" ชื่อเดียวกันพร้อมกัน ทั้งคู่เห็นว่าว่าง (บทเรียนเดียวกับ
+    invariant ของช่องไฟล์แนบที่ SELECT ก่อน write lock อ่านของเก่า)
+
+    409 ไม่ใช่ 422 สำหรับชื่อซ้ำ (ต่างจาก add_record ที่ตอบ 422 ให้ IntegrityError):
+    {"username": "malee"} เป็น body ที่ถูกรูปทุกอย่าง มันชนกับ *สถานะ* ที่มีอยู่
+    ไม่ได้ผิดรูป ฝั่ง client แสดงข้อความจาก `error` เหมือนกันทั้งสองทาง
+
+    Body (application/json เท่านั้น):
+        {"username", "password", "display_name", "role"} — role ขาด = ROLE_STAFF
+
+    Returns:
+        Response (JSON): 201 {'id', 'ok'}, 400 body ไม่ใช่ JSON object,
+                         403 ขอสิทธิ์เกินตัว, 409 ชื่อซ้ำ, 422 ค่าไม่ผ่าน, 500 DB ล้ม
+    """
+    body = json_object_body()
+    if body is None:
+        return jsonify({'error': BAD_JSON_MSG}), 400
+
+    username = normalize_username(body.get('username'))
+    name     = normalize_account_name(body.get('display_name'))
+    role     = body.get('role') or ROLE_STAFF
+    password = str(body.get('password') or '')
+
+    # ด่านรูปร่างข้อมูลทั้งหมดอยู่ที่ขอบ ก่อนแตะ DB และก่อนตรวจสิทธิ์ — ลำดับนี้ทำให้
+    # permission_problem เชื่อได้ว่า role อยู่ใน ROLES แล้ว และทำให้ request ที่ผิดรูป
+    # ไม่เคยเปิด connection เลย (แบบเดียวกับ add_record)
+    for problem in (username_problem(username), password_problem(password),
+                    role_problem(role), account_name_problem(name)):
+        if problem:
+            return jsonify({'error': problem}), 422
+
+    try:
+        with acting_on('user.create', new_role=role) as (con, _):
+            uid = create_user(con, username, password, role, name)
+    except sqlite3.IntegrityError:
+        return fail('create_user integrity', DUPLICATE_USER_MSG, 409)
+    except sqlite3.Error:
+        return fail('create_user', 'สร้างบัญชีผู้ใช้ไม่สำเร็จ')
+    audit('user_create', f'id={uid} username={username} role={role}')
+    return jsonify({'id': uid, 'ok': True}), 201
+
+
+@app.route(USERS_API + '/<int:uid>', methods=['PATCH'])
+def patch_user(uid):
+    """
+    PATCH /api/users/<id> — แก้บัญชีหนึ่งบัญชี หนึ่งคำขอ หนึ่ง transaction
+
+    เป็น route เดียวแทนสามตัว (/name, /role, /active) เพราะฟอร์มแก้ไขถือชื่อกับบทบาท
+    ไว้ด้วยกัน ถ้าเป็นสาม route การกดบันทึกครั้งเดียวจะยิงสอง request ที่คนละกฎสิทธิ์
+    แล้วการเปลี่ยนชื่ออาจ commit สำเร็จขณะที่การเปลี่ยนบทบาทถูกปฏิเสธ ผู้ใช้เหลือ
+    บัญชีที่แก้ไปครึ่งเดียวโดยไม่มีใครบอก
+
+    server เป็นคน diff ไม่ใช่ client (ดู user_changes) การตรวจสิทธิ์ของทุกช่องที่
+    เปลี่ยนเกิดก่อนการเขียนครั้งแรก การแก้ที่อนุญาตบางช่องจึงถูกปฏิเสธทั้งก้อน
+    และการยิงซ้ำได้ผลเดิมพร้อม changed=[]
+
+    เป็น PATCH ไม่ใช่ PUT: body เป็นชุดย่อยของช่องที่แก้ได้ ไม่ใช่สภาพทั้งก้อนของบัญชี
+    (ชื่อผู้ใช้กับรหัสผ่านเปลี่ยนทางนี้ไม่ได้) และไม่ใช่ DELETE /api/users/<id> ด้วย
+    เหตุผลเดียวกันที่ CLI ไม่มีคำสั่งลบ: "ลบ" ในระบบนี้หมายถึงปิดบัญชี ชื่อผู้ใช้
+    ถูกจองตลอดไป ไม่งั้นบรรทัดใน log ชี้ไปที่คนสองคนที่แยกกันไม่ออก
+
+    Body: ชุดย่อยของ {"display_name", "role", "is_active"}
+
+    Returns:
+        Response (JSON): 200 {'ok', 'changed'}, 400 body ไม่ใช่ JSON object,
+                         403 สิทธิ์ไม่ถึง, 404 ไม่มีบัญชีนั้น,
+                         409 จะไม่เหลือแอดมินที่ใช้งานได้, 422 ค่าไม่ผ่าน, 500 DB ล้ม
+    """
+    body = json_object_body()
+    if body is None:
+        return jsonify({'error': BAD_JSON_MSG}), 400
+    # คีย์แปลกปลอมเป็น 422 ไม่ใช่การข้ามเงียบ ๆ: client ที่พิมพ์ชื่อช่องผิดจะได้รับ
+    # 200 พร้อม changed=[] แล้วเข้าใจว่าบันทึกแล้วทั้งที่ไม่มีอะไรเปลี่ยน
+    if set(body) - set(USER_FIELDS):
+        return jsonify({'error': BAD_FIELD_MSG}), 422
+
+    try:
+        with acting_on(_patch_plan(body), uid) as (con, target):
+            # เรียก user_changes ซ้ำครั้งที่สอง (ครั้งแรกอยู่ใน _patch_plan) — มันบริสุทธิ์
+            # อินพุตเดียวกันให้ผลเดียวกัน ถูกกว่าการให้ acting_on ส่งค่าที่ route เดียว
+            # ใช้ออกมาเป็นสมาชิกตัวที่สามของทุก yield
+            changes = user_changes(body, target)
+            for field, value in changes.items():
+                USER_FIELDS[field].write(con, target['id'], value)
+    except sqlite3.Error:
+        return fail('patch_user', 'แก้ไขบัญชีผู้ใช้ไม่สำเร็จ')
+    if changes:
+        audit('user_patch', f'id={uid} username={target["username"]} '
+                            f'changed={",".join(changes)}')
+    return jsonify({'ok': True, 'changed': list(changes)})
+
+
+@app.route(USERS_API + '/<int:uid>/password', methods=['PUT'])
+def reset_user_password(uid):
+    """
+    PUT /api/users/<id>/password — ตั้งรหัสผ่านใหม่ให้คนอื่น แล้วไล่ออกทุกเครื่อง
+
+    แยกจาก PATCH เพราะรหัสผ่านไม่ใช่ช่องที่ diff ได้: ไม่มี "ค่าเดิม" ให้เทียบ
+    (DB เก็บแฮช) ยิงซ้ำด้วยค่าเดิมก็ยังเป็นการตั้งรหัสใหม่จริงทุกครั้ง และเป็นการ
+    กระทำที่ไล่คนออกจากทุกเครื่อง ซึ่งไม่ควรแฝงมากับการกดบันทึกชื่อ
+
+    **ลำดับใน transaction:** set_password → revoke_sessions → commit ของ acting_on
+    ไม่ส่ง keep_token เพราะเป็นบัญชีของคนอื่นเสมอ (ทำกับตัวเองถูกห้ามไว้ใน
+    USER_ACTIONS) เหตุผลเดียวกับ cmd_passwd ของ CLI คำต่อคำ: คนที่สั่งคือแอดมิน
+    ไม่ใช่เจ้าของบัญชีที่กำลังพิมพ์อยู่ และเหตุที่ต้องรีเซ็ตมักคือ "รหัสรู้ถึงคนอื่น
+    แล้ว" ซึ่งแปลว่าเซสชันที่ค้างอยู่น่าสงสัยทั้งหมด
+
+    ล้มระหว่างสองคำสั่ง → rollback ทั้งคู่ เหลือรหัสเก่ากับเซสชันเก่า ซึ่งสอดคล้องกัน
+    ไม่ใช่สภาพที่รหัสใหม่แล้วแต่เซสชันเก่ายังอยู่
+
+    set_password ล้าง failed_count และ locked_until ให้ด้วย การรีเซ็ตรหัสจึงเป็นวิธี
+    ปลดล็อกบัญชีที่ถูกล็อกชั่วคราวไปในตัว — เหตุผลที่ยังไม่มีปุ่ม "ปลดล็อก" แยก
+
+    Body: {"password": "..."}
+
+    Returns:
+        Response (JSON): 200 {'ok', 'revoked'}, 400 body ไม่ใช่ JSON object,
+                         403 สิทธิ์ไม่ถึงหรือเป็นบัญชีตัวเอง, 404 ไม่มีบัญชีนั้น,
+                         422 รหัสผ่านสั้นเกินไป, 500 DB ล้ม
+    """
+    body = json_object_body()
+    if body is None:
+        return jsonify({'error': BAD_JSON_MSG}), 400
+    password = str(body.get('password') or '')
+    problem = password_problem(password)
+    if problem:
+        return jsonify({'error': problem}), 422
+
+    try:
+        with acting_on('user.password', uid) as (con, target):
+            set_password(con, target['id'], password)
+            gone = revoke_sessions(con, target['id'])
+    except sqlite3.Error:
+        return fail('reset_user_password', 'ตั้งรหัสผ่านใหม่ไม่สำเร็จ')
+    audit('user_password', f'id={uid} username={target["username"]} revoked={gone}')
+    return jsonify({'ok': True, 'revoked': gone})
+
+
+# ────────────────────────────────────────────────
 # Routes — Attachments
 # ────────────────────────────────────────────────
 

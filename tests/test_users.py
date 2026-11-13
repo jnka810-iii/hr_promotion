@@ -10,13 +10,16 @@
 """
 
 import os
+import re
 import sqlite3
+import threading
 from contextlib import closing
 
 import pytest
 
 import app as hr
-from conftest import AUTH_SQL_MARK
+from conftest import (ADMIN_PASS, ADMIN_USER, AUTH_SQL_MARK, STAFF_PASS,
+                      STAFF_USER, login_as)
 
 
 MAX_CLIENT_MESSAGE = 80   # toastError ยกระดับข้อความที่ยาวกว่านี้เป็น alert()
@@ -389,3 +392,586 @@ def test_set_display_name_moves_updated(hr_app, db):
         row = con.execute('SELECT display_name, updated FROM users WHERE id=2').fetchone()
     assert row['display_name'] == 'ชื่อใหม่'
     assert row['updated'] != '01/01/2020 00:00'
+
+
+# ────────────────────────────────────────────────
+# Route — ทะเบียน action กับ route ต้องไม่หลุดจากกัน
+# ────────────────────────────────────────────────
+
+def test_every_registered_action_is_reachable_from_a_route():
+    """
+    กฎที่ไม่มี route และ route ที่ไม่มีกฎ ต้องแดงทั้งคู่ — อ่านจากตัวหนังสือในซอร์ส
+
+    action เดินทางถึง acting_on ได้สองทาง: เขียนชื่อไว้ตรง ๆ (list, create, password)
+    หรือมากับช่องของ PATCH (rename, role, active) ถ้ารอให้ KeyError ดังตอน runtime
+    มันจะดังเฉพาะเมื่อ route นั้นถูกเรียกเท่านั้น
+    """
+    named = set(re.findall(r"acting_on\('([a-z_.]+)'", app_source()))
+    by_field = {a for a, r in hr.USER_ACTIONS.items() if r.field}
+    assert named | by_field == set(hr.USER_ACTIONS)
+
+
+def test_every_patchable_field_has_a_rule_and_a_writer():
+    """
+    USER_FIELDS กับช่อง field ใน USER_ACTIONS ต้องตรงกันเป๊ะ
+
+    เพิ่ม action ที่แก้ช่องใหม่แล้วลืมเขียนกฎ normalize/เทียบ/ตรวจ/เขียนของมัน จะได้
+    ช่องที่ PATCH รับไว้แล้วบันทึกไม่เคยติด โดยยังตอบ 200 ให้ด้วย
+    """
+    assert set(hr.USER_FIELDS) == {r.field for r in hr.USER_ACTIONS.values() if r.field}
+    assert set(hr.FIELD_ACTIONS) == set(hr.USER_FIELDS)
+
+
+def test_fixture_user_ids_are_stable(hr_app, db):
+    """
+    tester.admin = 1, tester.staff = 2 ตามลำดับที่ hr_app สร้าง
+
+    WRITE_FAILURES ใน test_api.py เขียน /api/users/2 ไว้ตรง ๆ เพราะ lambda ของมันรับ
+    แค่ (client, record_id) แล้ว query อะไรไม่ได้ เทสต์นี้คือสิ่งที่ทำให้เลข 2 นั้น
+    ไม่ใช่เลขลอย
+    """
+    with closing(db()) as con:
+        assert hr.get_user(con, 1)['username'] == ADMIN_USER
+        assert hr.get_user(con, 2)['username'] == STAFF_USER
+
+
+# ────────────────────────────────────────────────
+# Route — สร้างบัญชี
+# ────────────────────────────────────────────────
+
+NEW_ACCOUNT = {'username': 'malee', 'password': 'password-1',
+               'display_name': 'นางสาวมาลี ศรีสุข', 'role': hr.ROLE_STAFF}
+
+
+def _account(**overrides):
+    body = dict(NEW_ACCOUNT)
+    body.update(overrides)
+    return body
+
+
+def test_staff_cannot_create_an_admin(staff_client):
+    r = staff_client.post('/api/users', json=_account(role=hr.ROLE_ADMIN))
+    assert r.status_code == 403
+    assert len(r.get_json()['error']) <= MAX_CLIENT_MESSAGE
+
+
+def test_staff_can_create_a_staff_account(staff_client):
+    """ด่านข้างบนต้องแคบอยู่ที่บทบาทที่ขอ ไม่ใช่กลายเป็นบัญชีที่สร้างอะไรไม่ได้เลย"""
+    assert staff_client.post('/api/users', json=_account()).status_code == 201
+
+
+def test_admin_can_create_an_admin(client):
+    """ด้านกลับ: 403 ข้างบนมาจากกฎอันดับ ไม่ใช่จาก route ที่พังไปเลย"""
+    assert client.post('/api/users', json=_account(role=hr.ROLE_ADMIN)).status_code == 201
+
+
+def test_a_duplicate_username_is_409(client):
+    """ชื่อซ้ำคือการชนกับสถานะที่มีอยู่ ไม่ใช่ body ที่ผิดรูป"""
+    assert client.post('/api/users', json=_account()).status_code == 201
+    r = client.post('/api/users', json=_account(display_name='คนละคน'))
+    assert r.status_code == 409
+    assert r.get_json()['error'] == hr.DUPLICATE_USER_MSG
+
+
+@pytest.mark.parametrize('body, why', [
+    (_account(username='ก'),                  'ชื่อผู้ใช้ไทย'),
+    (_account(username='ab'),                 'ชื่อผู้ใช้สั้นเกินไป'),
+    (_account(password='sh0rt'),              'รหัสผ่านสั้นเกินไป'),
+    (_account(role='manager'),                'บทบาทไม่มีอยู่จริง'),
+    (_account(display_name=''),               'ไม่ได้กรอกชื่อ'),
+    (_account(display_name='ก' * 101),        'ชื่อยาวเกินเพดาน'),
+])
+def test_a_bad_create_body_is_422(client, body, why):
+    r = client.post('/api/users', json=body)
+    assert r.status_code == 422, why
+    assert len(r.get_json()['error']) <= MAX_CLIENT_MESSAGE
+
+
+def test_an_unknown_role_is_422_not_403(client):
+    """
+    {"role": "manager"} คือ body ผิดรูป ไม่ใช่การขอสิทธิ์เกินตัว
+
+    ตอบ 403 จะบอกว่า "มีบทบาทนั้นอยู่แต่คุณสิทธิ์ไม่ถึง" ซึ่งไม่จริง และตอบ 500
+    แปลว่า ROLE_RANK ได้รับค่าที่ยังไม่ผ่านด่าน
+    """
+    assert client.post('/api/users', json=_account(role='manager')).status_code == 422
+
+
+def test_create_keeps_thai_in_the_display_name(client, db):
+    assert client.post('/api/users', json=_account()).status_code == 201
+    with closing(db()) as con:
+        row = con.execute("SELECT display_name FROM users WHERE username='malee'").fetchone()
+    assert row['display_name'] == 'นางสาวมาลี ศรีสุข'
+
+
+def test_a_form_encoded_post_creates_nothing(client, db):
+    """
+    SameSite=Lax กัน form POST ข้ามเว็บไม่ได้ และระบบนี้ไม่มี CSRF token (ADR-0004)
+    route พวกนี้จึงต้องอ่านแค่ application/json — json_object_body คือที่เดียวที่อ่าน body
+    """
+    r = client.post('/api/users', data=_account())
+    assert r.status_code == 400
+    with closing(db()) as con:
+        assert hr.find_user(con, 'malee') is None
+
+
+# ────────────────────────────────────────────────
+# Route — แก้บัญชี (PATCH) หนึ่งคำขอ หนึ่ง transaction
+# ────────────────────────────────────────────────
+
+def test_staff_cannot_rename_an_admin(staff_client, db):
+    r = staff_client.patch('/api/users/1', json={'display_name': 'ชื่อที่ไม่ควรติด'})
+    assert r.status_code == 403
+    assert len(r.get_json()['error']) <= MAX_CLIENT_MESSAGE
+    with closing(db()) as con:
+        assert hr.get_user(con, 1)['display_name'] == ''
+
+
+def test_staff_can_rename_another_staff_account(staff_client, client, db):
+    assert client.post('/api/users', json=_account()).status_code == 201
+    with closing(db()) as con:
+        uid = hr.find_user(con, 'malee')['id']
+    r = staff_client.patch(f'/api/users/{uid}', json={'display_name': 'นางมาลี ใจดี'})
+    assert r.status_code == 200
+    assert r.get_json()['changed'] == ['display_name']
+    with closing(db()) as con:
+        assert hr.get_user(con, uid)['display_name'] == 'นางมาลี ใจดี'
+
+
+def test_anyone_can_rename_their_own_account(staff_client, db):
+    """self_denial ของ user.rename เป็น '' — ไม่มีทางล็อกตัวเองออกด้วยการเปลี่ยนชื่อ"""
+    assert staff_client.patch('/api/users/2',
+                              json={'display_name': 'นายทดสอบ'}).status_code == 200
+    with closing(db()) as con:
+        assert hr.get_user(con, 2)['display_name'] == 'นายทดสอบ'
+
+
+def test_admin_can_rename_an_admin(client, db):
+    assert client.patch('/api/users/1', json={'display_name': 'นายผู้ดูแล'}).status_code == 200
+
+
+def test_patching_the_same_values_twice_converges(client):
+    """ยิงซ้ำได้ผลเดียวกัน ครั้งที่สองคืน changed=[] พร้อม 200 ไม่ใช่ error"""
+    body = {'display_name': 'นายสมชาย ใจดี', 'role': hr.ROLE_STAFF, 'is_active': True}
+    first = client.patch('/api/users/2', json=body)
+    second = client.patch('/api/users/2', json=body)
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.get_json()['changed'] == ['display_name']
+    assert second.get_json()['changed'] == []
+
+
+def test_an_unchanged_role_in_the_body_is_not_a_role_change(staff_client):
+    """
+    ฟอร์มส่งมาทั้งชุดทุกครั้ง การส่ง role ที่ไม่ได้แก้มาด้วยต้องไม่นับเป็นการเปลี่ยน
+    บทบาท ไม่งั้นฝั่ง client ต้องมีตรรกะว่าช่องไหนเปลี่ยน ซึ่งเป็นที่ที่มันจะเขียนผิด
+    """
+    r = staff_client.patch('/api/users/2', json={'display_name': 'นายทดสอบ',
+                                                 'role': hr.ROLE_STAFF})
+    assert r.status_code == 200
+    assert r.get_json()['changed'] == ['display_name']
+
+
+def test_a_partly_permitted_edit_is_refused_whole(staff_client, db):
+    """
+    staff ส่งชื่อ (ทำได้) มาพร้อมบทบาท (ทำไม่ได้) ในคำขอเดียว ต้องถูกปฏิเสธทั้งก้อน
+    ไม่ใช่เปลี่ยนชื่อสำเร็จแล้วค่อยปฏิเสธบทบาท เหลือบัญชีที่แก้ไปครึ่งเดียว
+    """
+    r = staff_client.patch('/api/users/2', json={'display_name': 'นายทดสอบ',
+                                                 'role': hr.ROLE_ADMIN})
+    assert r.status_code == 403
+    with closing(db()) as con:
+        row = hr.get_user(con, 2)
+    assert row['display_name'] == '' and row['role'] == hr.ROLE_STAFF
+
+
+def test_staff_cannot_change_any_role(staff_client):
+    assert staff_client.patch('/api/users/2',
+                              json={'role': hr.ROLE_ADMIN}).status_code == 403
+
+
+def test_admin_can_change_a_role(client, db):
+    assert client.patch('/api/users/2', json={'role': hr.ROLE_ADMIN}).status_code == 200
+    with closing(db()) as con:
+        assert hr.get_user(con, 2)['role'] == hr.ROLE_ADMIN
+
+
+def test_admin_cannot_demote_themselves(client, db):
+    """ลดบทบาทตัวเอง = ล็อกตัวเองออกจากทุกปุ่มของ admin โดยไม่มีทางกลับ"""
+    r = client.patch('/api/users/1', json={'role': hr.ROLE_STAFF})
+    assert r.status_code == 403
+    with closing(db()) as con:
+        assert hr.get_user(con, 1)['role'] == hr.ROLE_ADMIN
+
+
+def test_staff_cannot_disable_an_account(staff_client):
+    assert staff_client.patch('/api/users/2',
+                              json={'is_active': False}).status_code == 403
+
+
+def test_admin_can_disable_and_re_enable(client, db):
+    assert client.patch('/api/users/2', json={'is_active': False}).status_code == 200
+    with closing(db()) as con:
+        assert hr.get_user(con, 2)['is_active'] == 0
+    assert client.patch('/api/users/2', json={'is_active': True}).status_code == 200
+    with closing(db()) as con:
+        assert hr.get_user(con, 2)['is_active'] == 1
+
+
+def test_admin_cannot_disable_themselves(client):
+    """set_active ไล่เซสชันตัวเองออกใน request เดียวกัน คนที่กดจะถูกเตะออกกลางการกด"""
+    assert client.patch('/api/users/1', json={'is_active': False}).status_code == 403
+
+
+def test_is_active_must_be_a_real_boolean(client, db):
+    """'false' เป็นสตริงที่ truthy — รับไว้คือการเปิดบัญชีตอนที่คนสั่งปิด"""
+    r = client.patch('/api/users/2', json={'is_active': 'false'})
+    assert r.status_code == 422
+    with closing(db()) as con:
+        assert hr.get_user(con, 2)['is_active'] == 1
+
+
+def test_an_unknown_field_is_422(client):
+    """
+    คีย์แปลกปลอมต้องไม่ถูกข้ามเงียบ ๆ: client ที่พิมพ์ชื่อช่องผิดจะได้ 200 พร้อม
+    changed=[] แล้วเข้าใจว่าบันทึกแล้วทั้งที่ไม่มีอะไรเปลี่ยน
+    """
+    assert client.patch('/api/users/2', json={'username': 'ชื่อใหม่'}).status_code == 422
+    assert client.patch('/api/users/2', json={'password': 'x' * 12}).status_code == 422
+
+
+def test_an_empty_patch_body_changes_nothing(client):
+    r = client.patch('/api/users/2', json={})
+    assert r.status_code == 200
+    assert r.get_json()['changed'] == []
+
+
+def test_disabling_an_account_cuts_its_sessions_in_the_same_request(hr_app, client, db):
+    """
+    อะตอมจริง: ปิดบัญชีแล้วเซสชันของคนนั้นหายไปพร้อมกัน ไม่ใช่รอให้หมดอายุ
+
+    login_as เป็นฟังก์ชันธรรมดา จึงถือ cookie jar สองใบต่อ DB เดียวได้ — ใบหนึ่งเป็น
+    admin ที่สั่ง อีกใบเป็น staff ที่กำลังใช้งานอยู่
+    """
+    victim = login_as(hr_app, STAFF_USER, STAFF_PASS)
+    assert victim.get('/api/records').status_code == 200
+    assert client.patch('/api/users/2', json={'is_active': False}).status_code == 200
+    assert victim.get('/api/records').status_code == 401
+    with closing(db()) as con:
+        assert con.execute('SELECT COUNT(*) FROM sessions WHERE user_id=2').fetchone()[0] == 0
+
+
+def test_a_demoted_admin_is_already_staff_on_their_next_request(hr_app, client, db):
+    """
+    เซสชันไม่แบก role: resolve_session JOIN users สด ๆ ทุก request
+
+    นี่คือเหตุผลที่การเปลี่ยนบทบาทไม่ต้อง revoke_sessions และเป็นคุณสมบัติที่ได้มาจาก
+    การเก็บเซสชันฝั่ง server (docs/adr/0003) ถ้าวันหน้าใครย้าย role ไปอยู่ในเซสชัน
+    เทสต์นี้จะแดง
+    """
+    with closing(db()) as con:
+        uid = hr.create_user(con, 'second.admin', 'second-password', hr.ROLE_ADMIN)
+        con.commit()
+    second = login_as(hr_app, 'second.admin', 'second-password')
+    assert second.delete('/api/records').status_code == 200
+    assert client.patch(f'/api/users/{uid}', json={'role': hr.ROLE_STAFF}).status_code == 200
+    assert second.delete('/api/records').status_code == 403
+
+
+# ────────────────────────────────────────────────
+# Route — ตั้งรหัสผ่านใหม่ให้คนอื่น
+# ────────────────────────────────────────────────
+
+def test_staff_cannot_reset_an_admins_password(staff_client):
+    r = staff_client.put('/api/users/1/password', json={'password': 'brand-new-pass'})
+    assert r.status_code == 403
+    assert len(r.get_json()['error']) <= MAX_CLIENT_MESSAGE
+
+
+def test_admin_can_reset_a_staffs_password(hr_app, client):
+    r = client.put('/api/users/2/password', json={'password': 'brand-new-pass'})
+    assert r.status_code == 200
+    assert login_as(hr_app, STAFF_USER, 'brand-new-pass')
+
+
+def test_staff_can_reset_another_staffs_password(staff_client, client, db):
+    assert client.post('/api/users', json=_account()).status_code == 201
+    with closing(db()) as con:
+        uid = hr.find_user(con, 'malee')['id']
+    assert staff_client.put(f'/api/users/{uid}/password',
+                            json={'password': 'brand-new-pass'}).status_code == 200
+
+
+@pytest.mark.parametrize('who, uid', [('client', 1), ('staff_client', 2)])
+def test_nobody_resets_their_own_password_through_this_tab(request, who, uid):
+    """
+    การตั้งรหัสใหม่โดยไม่ต้องรู้รหัสเดิมคือสิ่งเดียวที่ /change-password กันไว้
+    ข้อความต้องบอกทางไป ไม่ใช่แค่ปฏิเสธ
+    """
+    c = request.getfixturevalue(who)
+    r = c.put(f'/api/users/{uid}/password', json={'password': 'brand-new-pass'})
+    assert r.status_code == 403
+    assert 'รหัสผ่าน' in r.get_json()['error']
+
+
+def test_a_password_reset_revokes_the_target_and_not_the_actor(hr_app, client):
+    """set_password + revoke_sessions ใน transaction เดียว และไม่ส่ง keep_token"""
+    victim = login_as(hr_app, STAFF_USER, STAFF_PASS)
+    r = client.put('/api/users/2/password', json={'password': 'brand-new-pass'})
+    assert r.status_code == 200 and r.get_json()['revoked'] >= 1
+    assert victim.get('/api/records').status_code == 401
+    assert client.get('/api/records').status_code == 200
+
+
+def test_a_password_reset_also_clears_a_temporary_lock(client, db):
+    """set_password ล้าง failed_count/locked_until ให้ — บัญชีที่ถูกล็อกกลับมาใช้ได้ทันที"""
+    with closing(db()) as con:
+        con.execute("UPDATE users SET failed_count=5, locked_until=? WHERE id=2",
+                    (hr.ts_after(minutes=5),))
+        con.commit()
+    assert client.put('/api/users/2/password',
+                      json={'password': 'brand-new-pass'}).status_code == 200
+    with closing(db()) as con:
+        row = con.execute('SELECT failed_count, locked_until FROM users WHERE id=2').fetchone()
+    assert row['failed_count'] == 0 and row['locked_until'] is None
+
+
+def test_a_short_password_is_422(client):
+    r = client.put('/api/users/2/password', json={'password': 'sh0rt'})
+    assert r.status_code == 422
+    assert len(r.get_json()['error']) <= MAX_CLIENT_MESSAGE
+
+
+# ────────────────────────────────────────────────
+# Route — บัญชีที่ไม่มีอยู่ และ body ที่ไม่ใช่ JSON
+# ────────────────────────────────────────────────
+
+@pytest.mark.parametrize('method, url, body', [
+    ('patch', '/api/users/9999', {'display_name': 'ใครก็ไม่รู้'}),
+    ('put',   '/api/users/9999/password', {'password': 'brand-new-pass'}),
+])
+def test_a_missing_account_is_404(client, method, url, body):
+    r = getattr(client, method)(url, json=body)
+    assert r.status_code == 404
+    assert r.get_json()['error'] == hr.NO_SUCH_USER_MSG
+
+
+@pytest.mark.parametrize('method, url', [
+    ('post',  '/api/users'),
+    ('patch', '/api/users/2'),
+    ('put',   '/api/users/2/password'),
+])
+def test_a_body_that_is_not_a_json_object_is_400(client, method, url):
+    r = getattr(client, method)(url, json=['ไม่ใช่ object'])
+    assert r.status_code == 400
+
+
+# ────────────────────────────────────────────────
+# ระบบต้องเหลือผู้ดูแลระบบที่ใช้งานได้เสมอ
+# ────────────────────────────────────────────────
+
+def test_the_system_always_has_an_active_admin(hr_app, db):
+    """
+    แอดมินสองคนปิดบัญชีกันเองพร้อมกัน ทั้งคู่ผ่านกฎ "ห้ามปิดบัญชีตัวเอง" ของตัวเอง
+    ถ้าไม่มีใครนับจำนวนแอดมินในจังหวะที่ถือ write lock อยู่ ทั้งคู่จะ commit แล้ว
+    ระบบเหลือแอดมินที่ใช้งานได้ศูนย์บัญชี ซึ่งกู้คืนได้เฉพาะที่เครื่องเซิร์ฟเวอร์
+    """
+    with closing(db()) as con:
+        second = hr.create_user(con, 'second.admin', 'second-password', hr.ROLE_ADMIN)
+        con.commit()
+    first_client = login_as(hr_app, ADMIN_USER, ADMIN_PASS)
+    second_client = login_as(hr_app, 'second.admin', 'second-password')
+
+    codes, lock = [], threading.Lock()
+    start = threading.Barrier(2)
+
+    def disable(c, uid):
+        start.wait()
+        r = c.patch(f'/api/users/{uid}', json={'is_active': False})
+        with lock:
+            codes.append(r.status_code)
+
+    threads = [threading.Thread(target=disable, args=(first_client, second)),
+               threading.Thread(target=disable, args=(second_client, 1))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    with closing(db()) as con:
+        left = hr._active_admin_count(con)
+    assert left >= 1, 'ระบบเหลือแอดมินที่ใช้งานได้ศูนย์บัญชี — ล็อกตัวเองออกถาวร'
+    assert codes.count(200) == 1, f'มีคนเดียวที่ควรสำเร็จ แต่ได้ {codes}'
+
+
+def test_an_already_adminless_database_can_still_be_edited(hr_app, staff_client, db):
+    """
+    กฎข้างบนต้องแคบอยู่ที่ "คำขอนี้เป็นตัวที่ทำให้เหลือศูนย์" ไม่ใช่ "ตอนนี้เหลือศูนย์"
+
+    DB ที่ไม่มีแอดมินที่ใช้งานได้อยู่ก่อนแล้ว (restore backup ผิดไฟล์ หรือใครไปปิด
+    บัญชีด้วย CLI) ต้องยังแก้ชื่อบัญชีอื่นได้ ไม่ใช่กลายเป็นระบบที่แก้อะไรไม่ได้เลย
+    """
+    with closing(db()) as con:
+        con.execute('UPDATE users SET is_active=0 WHERE role=?', (hr.ROLE_ADMIN,))
+        con.commit()
+    assert hr.ROLE_STAFF  # staff_client ยังล็อกอินอยู่ บัญชีของเขาไม่ได้ถูกปิด
+    assert staff_client.patch('/api/users/2',
+                              json={'display_name': 'นายทดสอบ'}).status_code == 200
+
+
+# ────────────────────────────────────────────────
+# สิ่งที่ไม่ควรออกไปถึง client และสิ่งที่ต้องออกไป
+# ────────────────────────────────────────────────
+
+def test_the_response_never_carries_a_password_hash(client):
+    """assert ทับ text ทั้งก้อน ไม่ใช่ทีละคีย์ — SELECT * ที่ใครเพิ่มวันหน้าต้องไม่หลุดทางนี้"""
+    body = client.get('/api/users').get_data(as_text=True)
+    for leak in ('password_hash', 'scrypt', 'pbkdf2', 'failed_count'):
+        assert leak not in body
+
+
+def test_the_response_never_carries_locked_until(client):
+    """client ได้ `status` ที่อ่านแล้วจบ ไม่ได้วัตถุดิบที่ต้องตีความด้วยนโยบายล็อกฉบับที่สอง"""
+    assert 'locked_until' not in client.get('/api/users').get_data(as_text=True)
+
+
+def test_timestamps_arrive_in_a_sortable_format(client):
+    """created/updated ต้องเป็น YYYY-MM-DD HH:MM — dd/mm/YYYY กดเรียงแล้วผิดลำดับเวลา"""
+    u = client.get('/api/users').get_json()['users'][0]
+    assert re.fullmatch(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}', u['created'])
+    assert re.fullmatch(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}', u['updated'])
+
+
+def test_the_status_travels_as_a_code_with_its_label_beside_it(client, db):
+    """
+    แถวส่ง 'locked' ไม่ใช่ 'ล็อกชั่วคราว' — ฝั่ง client เลือกสีจากรหัส ไม่ใช่จากการ
+    เทียบสตริงไทย และป้ายไทยเดินทางมาเป็น list ของคู่เพื่อรักษาลำดับ
+    """
+    with closing(db()) as con:
+        con.execute('UPDATE users SET locked_until=? WHERE id=2', (hr.ts_after(minutes=5),))
+        con.commit()
+    data = client.get('/api/users').get_json()
+    locked = next(u for u in data['users'] if u['id'] == 2)
+    assert locked['status'] == hr.STATUS_LOCKED
+    assert data['status_labels'] == [list(p) for p in hr.STATUS_LABELS.items()]
+    assert data['role_labels'] == [list(p) for p in hr.ROLE_LABELS.items()]
+
+
+def test_the_name_falls_back_to_the_username_at_the_read_boundary(client):
+    """
+    `name` คือสิ่งที่จอแสดงและใช้เรียง `display_name` คือคอลัมน์ดิบที่ฟอร์มเติม
+    ถ้า fallback อยู่ในฟอร์ม ผู้ใช้จะกดบันทึกแล้วได้ชื่อผู้ใช้กลายเป็นชื่อตัวเอง
+    """
+    me = client.get('/api/users').get_json()['users'][0]
+    assert me['display_name'] == ''
+    assert me['name'] == ADMIN_USER
+
+
+def test_the_password_hint_is_the_enforcement_message(client):
+    """เลข 8 มีที่เดียวคือ PASSWORD_MIN_LEN ไม่ใช่สองที่ที่เลื่อนออกจากกันได้"""
+    assert client.get('/api/users').get_json()['password_hint'] == hr.password_problem('')
+
+
+def test_staff_sees_no_admin_role_option(staff_client):
+    """grantable_roles กรองด้วยกฎอันดับ — staff ไม่เห็น 'admin' เป็นตัวเลือกเลย"""
+    data = staff_client.get('/api/users').get_json()
+    assert [r[0] for r in data['grantable_roles']] == [hr.ROLE_STAFF]
+    assert data['can_create'] is True
+
+
+def test_admin_can_grant_both_roles(client):
+    data = client.get('/api/users').get_json()
+    assert [r[0] for r in data['grantable_roles']] == list(hr.ROLES)
+
+
+def test_staff_sees_every_account_including_admins(staff_client):
+    """ตัดสินใจที่บันทึกไว้: ไม่กรองแถว admin ออก แต่ `can` ของมันว่าง"""
+    rows = staff_client.get('/api/users').get_json()['users']
+    admin_row = next(r for r in rows if r['role'] == hr.ROLE_ADMIN)
+    assert admin_row['can'] == []
+
+
+@pytest.mark.parametrize('who', ['client', 'staff_client'])
+def test_can_on_each_row_matches_what_the_route_enforces(request, who):
+    """
+    ปุ่มที่วาดกับคำปฏิเสธมาจาก permission_problem ตัวเดียวกัน เทสต์นี้ปักว่ายังจริง
+
+    สำหรับทุกแถวและทุก action ที่มีเป้าหมาย: `can` บอกว่าทำได้ route ต้องไม่ตอบ 403
+    และบอกว่าทำไม่ได้ route ต้องตอบ 403 เป๊ะ ๆ
+    """
+    c = request.getfixturevalue(who)
+    # ทุก probe ต้องขอค่าที่ **ต่างจากของเดิมจริง** ไม่งั้น PATCH จะไม่นับว่าเป็น action
+    # นั้นเลย (ดู user_changes) แล้วเทสต์จะเทียบ 200-ที่ไม่ได้ทำอะไร กับคำว่า "ทำได้"
+    probe = {
+        'user.rename':   lambda row: c.patch(f'/api/users/{row["id"]}',
+                                             json={'display_name': 'ชื่อทดสอบสิทธิ์'}),
+        'user.role':     lambda row: c.patch(
+            f'/api/users/{row["id"]}',
+            json={'role': hr.ROLE_STAFF if row['role'] == hr.ROLE_ADMIN else hr.ROLE_ADMIN}),
+        'user.active':   lambda row: c.patch(
+            f'/api/users/{row["id"]}',
+            json={'is_active': row['status'] == hr.STATUS_DISABLED}),
+        'user.password': lambda row: c.put(f'/api/users/{row["id"]}/password',
+                                           json={'password': 'brand-new-pass'}),
+    }
+    assert set(probe) == set(hr.TARGET_ACTIONS)
+    for row in c.get('/api/users').get_json()['users']:
+        for action, send in probe.items():
+            refused = send(row).status_code == 403
+            assert refused is (action not in row['can']), f'{action} id={row["id"]}'
+
+
+def test_no_error_message_echoes_a_value_the_client_sent(client):
+    """
+    ข้อความที่ผู้ใช้เห็นต้องเป็นข้อความคงที่ ไม่มีค่าที่ client ส่งมาประกอบอยู่ข้างใน
+
+    toastError วัดความยาวของ err.message แล้วยกระดับที่ยาวเกิน 80 เป็น alert() ที่
+    ต้องกดปิด ข้อความที่ประกอบจากค่าที่ผู้ใช้พิมพ์มาจะข้ามเพดานนั้นเมื่อไหร่ก็ได้
+    โดยไม่มีเทสต์ไหนจับได้ และมันยังเป็นทางให้ค่าที่ไม่น่าเชื่อถือย้อนกลับไปขึ้นจอ
+    """
+    sent = 'ก' * 200
+    replies = [
+        client.post('/api/users', json=_account(username=sent)),
+        client.post('/api/users', json=_account(display_name=sent)),
+        client.post('/api/users', json=_account(role=sent)),
+        client.patch('/api/users/2', json={'display_name': sent}),
+        client.patch('/api/users/2', json={sent: 'x'}),
+        client.patch('/api/users/2', json={'role': sent}),
+        client.put('/api/users/2/password', json={'password': sent[:3]}),
+    ]
+    for r in replies:
+        msg = r.get_json()['error']
+        assert sent[:10] not in msg, msg
+        assert len(msg) <= MAX_CLIENT_MESSAGE, msg
+
+
+# ────────────────────────────────────────────────
+# audit log — ไฟล์ log เป็นที่เดียวที่บันทึกว่าใครแตะบัญชีใคร
+# ────────────────────────────────────────────────
+
+def test_each_mutation_writes_one_audit_line_naming_both_people(client, caplog, db):
+    """
+    CLAUDE.md บอกว่าเหตุผลที่ชื่อผู้ใช้ถูกจองตลอดไปคือบรรทัดใน log ต้องชี้ไปที่คนเดียว
+    บรรทัดของแท็บนี้จึงต้องมีทั้งชื่อคนที่สั่งและชื่อบัญชีที่ถูกแตะ ไม่ใช่แค่ id
+    """
+    with caplog.at_level('INFO', logger='hr_promotion'):
+        client.post('/api/users', json=_account())
+        client.patch('/api/users/2', json={'display_name': 'นายทดสอบ'})
+        client.put('/api/users/2/password', json={'password': 'brand-new-pass'})
+    assert f'user={ADMIN_USER} user_create' in caplog.text
+    assert 'username=malee' in caplog.text
+    assert f'user={ADMIN_USER} user_patch id=2 username={STAFF_USER}' in caplog.text
+    assert f'user={ADMIN_USER} user_password id=2 username={STAFF_USER}' in caplog.text
+
+
+def test_a_refusal_writes_an_audit_line(staff_client, caplog):
+    """errorhandler ของ UserRequestRefused เขียน audit ที่เดียว แบบที่ require_admin ทำ"""
+    with caplog.at_level('INFO', logger='hr_promotion'):
+        staff_client.patch('/api/users/1', json={'display_name': 'ชื่อที่ไม่ควรติด'})
+    assert f'user={STAFF_USER} refused 403 PATCH /api/users/1' in caplog.text
+
+
+def test_a_patch_that_changes_nothing_writes_no_audit_line(client, caplog):
+    """บรรทัด audit ต้องบอกสิ่งที่เปลี่ยนจริง ไม่ใช่สิ่งที่ถูกส่งมา"""
+    with caplog.at_level('INFO', logger='hr_promotion'):
+        client.patch('/api/users/2', json={'role': hr.ROLE_STAFF})
+    assert 'user_patch' not in caplog.text

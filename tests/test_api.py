@@ -27,7 +27,7 @@ import types
 import pytest
 
 import app as hr
-from conftest import VALID_RECORD
+from conftest import STAFF_USER, VALID_RECORD
 
 
 # ────────────────────────────────────────────────
@@ -371,7 +371,38 @@ WRITE_FAILURES = [
      lambda c, rid: c.delete('/api/records')),
     ('delete_attachment', 'DELETE FROM ATTACHMENTS',
      lambda c, rid: c.delete('/api/attachments/1')),
+    # route ฝั่งบัญชีผู้ใช้ — เป้าหมายเป็น id 2 (tester.staff) เสมอ ไม่ใช่ 1
+    # ซึ่งเป็นบัญชีที่ `client` ล็อกอินอยู่: ทำกับตัวเองถูก USER_ACTIONS ห้ามไว้
+    # จะได้ 403 ตั้งแต่ก่อนแตะ DB แล้วเทสต์ทั้งสองตัวจะเขียวโดยไม่ได้ฉีด SQL ที่พัง
+    # เข้าไปเลย (`test_the_write_failure_target_is_not_the_caller` กันไว้อีกชั้น)
+    ('create_user',    'INSERT INTO USERS',
+     lambda c, rid: c.post('/api/users', json={'username': 'malee.s',
+                                               'display_name': 'มาลี ศรีสุข',
+                                               'password': 'test-password-9'})),
+    ('update_user',    'UPDATE USERS',
+     lambda c, rid: c.patch('/api/users/2', json={'display_name': 'มาลี ศรีสุข'})),
+    ('reset_password', 'UPDATE USERS',
+     lambda c, rid: c.put('/api/users/2/password', json={'password': 'test-password-9'})),
 ]
+
+
+def test_the_write_failure_target_is_not_the_caller(client, db):
+    """
+    id 2 ที่ WRITE_FAILURES ยิงใส่ ต้องเป็นคนละคนกับที่ `client` ล็อกอินอยู่
+
+    ถ้าวันหนึ่งลำดับการสร้างผู้ใช้ใน conftest สลับกัน id 2 จะกลายเป็น tester.admin
+    เอง ทุกเคสฝั่งบัญชีผู้ใช้จะได้ 403 จากกฎ "ทำกับตัวเองไม่ได้" ตั้งแต่ก่อนเปิด
+    connection แล้วเทสต์ connection-leak กับเทสต์ข้อความ error จะยังเขียวอยู่ทั้งคู่
+    โดยไม่ได้ทดสอบ route เลยสักตัว เทสต์นี้คือสิ่งที่ทำให้ความเงียบนั้นดังขึ้น
+    """
+    con = db()
+    try:
+        row = con.execute('SELECT username FROM users WHERE id=2').fetchone()
+    finally:
+        con.close()
+    assert row, 'ไม่มีผู้ใช้ id=2 — WRITE_FAILURES ฝั่งบัญชียิงใส่คนที่ไม่มีอยู่'
+    assert row['username'] == STAFF_USER
+    assert client.get('/api/users').get_json()['self_id'] != 2
 
 
 @pytest.mark.parametrize('name, sql, send', WRITE_FAILURES, ids=[w[0] for w in WRITE_FAILURES])
@@ -452,6 +483,7 @@ READ_ROUTES = [
     '/api/attachments/1/preview',
     '/api/stats',
     '/api/export/csv',
+    '/api/users',
 ]
 
 

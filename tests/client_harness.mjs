@@ -21,6 +21,8 @@ const WANT = [
   'apiFetch', 'dbGetAll', 'loadAll', 'detectMode', 'renderTable', 'statusRow',
   'retryLoad', 'byId', 'esc', 'fmtDate', 'toastError', 'onUnauthorized',
   'loadState', 'allRecords', 'USE_FLASK', 'UNKNOWN', 'TBL_COLS',
+  'loadUsers', 'renderUsers', 'sortUsers', 'pageOf', 'fmtStamp', 'cmpStamp',
+  'usersState', 'allUsers', 'usersMeta', 'usrSort', 'usrPage', 'usrPerPage', 'USR_COLS',
 ];
 
 /** นับรอบการ load เพื่อ bust cache ของ data: URL (ดูคอมเมนต์ที่จุด import) */
@@ -75,7 +77,15 @@ export async function load({ fetch }) {
   }
   // `export { let }` ใน ES module เป็น live binding — อ่านค่าหลังเรียกฟังก์ชันได้ตรง ๆ
   // แต่ namespace object เป็น read-only จึงต้องมี setter สำหรับสวิตช์ที่เทสต์ต้องตั้งเอง
-  src += `\nexport function setUseFlask(v){ USE_FLASK = v; }\n`;
+  src += `\nexport function setUseFlask(v){ USE_FLASK = v; }
+export function setUsersView(v){
+  if(v.allUsers   !== undefined) allUsers   = v.allUsers;
+  if(v.usersMeta  !== undefined) usersMeta  = v.usersMeta;
+  if(v.usersState !== undefined) usersState = v.usersState;
+  if(v.usrSort    !== undefined) usrSort    = v.usrSort;
+  if(v.usrPage    !== undefined) usrPage    = v.usrPage;
+  if(v.usrPerPage !== undefined) usrPerPage = v.usrPerPage;
+}\n`;
   src += `\nexport { ${WANT.join(', ')} };\n`;
 
   // ── สภาพแวดล้อมปลอม ──

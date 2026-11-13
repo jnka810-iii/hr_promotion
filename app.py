@@ -1931,7 +1931,10 @@ def index():
     return render_template('index.html',
                            required_fields=list(REQUIRED_FIELDS.items()),
                            current_user=g.user['username'],
+                           current_name=(g.user['display_name'] or '').strip()
+                                        or g.user['username'],
                            current_role=g.user['role'],
+                           current_role_label=ROLE_LABELS[g.user['role']],
                            is_admin=g.user['role'] == ROLE_ADMIN)
 
 @app.route('/api/records', methods=['GET'])

@@ -622,6 +622,57 @@ def test_admin_cannot_disable_themselves(client):
     assert client.patch('/api/users/1', json={'is_active': False}).status_code == 403
 
 
+def test_the_system_always_keeps_an_active_admin(client, db, monkeypatch):
+    """
+    การเขียนที่ทำให้ไม่เหลือผู้ดูแลระบบที่ใช้งานได้ ต้องถูกยกเลิกทั้งก้อน
+
+    กฎ "ห้ามปิดหรือลดบทบาทตัวเอง" ครอบเกือบหมดแล้ว แต่ไม่ใช่ทั้งหมด: admin สองคน
+    สั่งปิดบัญชีของกันและกันพร้อมกัน ต่างคนต่างผ่านด่าน "ไม่ใช่ตัวเอง" ของตัวเอง
+    และต่างคนต่างไม่ได้นับจำนวน admin ด่านจริงจึงต้องเป็นการนับ **หลังเขียน** ซึ่งอยู่
+    ใน write lock ของ SQLite แล้ว (นับก่อนเขียนอ่าน snapshot ที่ถ่ายไว้ก่อนได้ lock
+    สอง request ที่แข่งกันจะเห็นเลขเดียวกันทั้งคู่ แล้วทั้งคู่ผ่าน)
+
+    เทสต์นี้ยิงจังหวะนั้นด้วยการทำให้การนับหลังเขียนตอบ 0 เพราะลำดับ commit จริง
+    ของสอง request สร้างขึ้นใหม่ใน test client ไม่ได้ สิ่งที่พิสูจน์คือสองอย่างที่
+    พังได้จริง: route ตอบ 409 ไม่ใช่ 500 และแถวถูก rollback ไม่ใช่ค้างครึ่งทาง
+    (ของจริงพิสูจน์ด้วยการแข่งสองเธรดกับเซิร์ฟเวอร์ที่รันอยู่ ดู docs/adr/0005)
+    """
+    # ก่อนเขียนยังมี admin อยู่ หลังเขียนไม่เหลือ — คือรูปร่างของการแข่งกันพอดี
+    counts = iter([1, 0])
+    monkeypatch.setattr(hr, '_active_admin_count', lambda con: next(counts))
+
+    r = client.patch('/api/users/2', json={'display_name': 'ชื่อใหม่'})
+
+    assert r.status_code == 409
+    assert len(r.get_json()['error']) <= 80
+    with closing(db()) as con:
+        assert hr.get_user(con, 2)['display_name'] != 'ชื่อใหม่', \
+            'การเขียนต้องถูก rollback ทั้งก้อน ไม่ใช่ commit แล้วค่อยบ่น'
+
+
+def test_a_read_only_request_does_not_pay_for_the_admin_count(client, monkeypatch):
+    """
+    request ที่ไม่ได้เขียนอะไรต้องไม่ถูกปฏิเสธด้วยกฎที่คำตอบเปลี่ยนไม่ได้
+
+    PATCH ที่ส่งค่าเดิมมาไม่เขียนอะไรเลย ถ้ามันยังไปนับ admin แล้วเจอ 0 (เช่น DB ที่
+    restore ผิดไฟล์มาโดยไม่มี admin ที่ใช้งานได้) การแก้ชื่อบัญชีอื่นจะพังไปด้วย
+    ทั้งที่ไม่ได้ทำให้อะไรแย่ลง
+    """
+    calls = []
+
+    def counted(con):
+        calls.append(1)
+        return 0 if len(calls) > 1 else 1
+
+    monkeypatch.setattr(hr, '_active_admin_count', counted)
+
+    r = client.patch('/api/users/2', json={'display_name': ''})
+
+    assert r.status_code == 200
+    assert r.get_json()['changed'] == []
+    assert len(calls) == 1, 'ไม่มีการเขียน ก็ไม่ต้องจ่าย query นับ admin รอบที่สอง'
+
+
 def test_is_active_must_be_a_real_boolean(client, db):
     """'false' เป็นสตริงที่ truthy — รับไว้คือการเปิดบัญชีตอนที่คนสั่งปิด"""
     r = client.patch('/api/users/2', json={'is_active': 'false'})

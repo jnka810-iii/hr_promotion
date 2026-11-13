@@ -479,6 +479,24 @@ def _add_missing_columns(con, table: str, cols: dict):
             con.execute(f'ALTER TABLE {table} ADD COLUMN {col} {ctype}')
 
 
+# คอลัมน์ของ users ที่เกิดหลังตารางถูกสร้าง ประกาศที่นี่ **ที่เดียว** ไม่ประกาศซ้ำใน
+# CREATE TABLE users ด้วย: ประกาศสองที่แปลว่า DEFAULT มีสองสำเนาที่เลื่อนออกจากกันได้
+# และเส้นทาง migration จะไม่เคยถูกเดินเลยบนเครื่องที่ติดตั้งใหม่ แล้วค่อยพังวันที่มี
+# คนอัปเกรดจริง การประกาศที่เดียวทำให้ทั้งเครื่องใหม่และเครื่องที่อัปเกรดเดินบรรทัด
+# เดียวกัน เส้นทางนี้จึงเน่าไม่ได้
+#
+# NOT NULL DEFAULT '' ไม่ใช่ nullable: '' แปลว่า "ยังไม่มีใครตั้งชื่อ" ซึ่งจอแสดงเป็น
+# ชื่อผู้ใช้สีเทา การมี NULL เพิ่มสภาวะที่สามที่ไม่มีความหมายต่างออกไป แล้วทุกจุดที่
+# อ่านต้องเช็คสองแบบ (SQLite ยอมให้ ALTER เพิ่ม NOT NULL ได้ตราบที่มี DEFAULT คงที่)
+#
+# ไม่ backfill เป็น username ด้วยสองเหตุ: ชื่อที่คนพิมพ์เองจะแยกจากชื่อที่ระบบเติมให้
+# ไม่ออกอีกต่อไป และ UPDATE ทั้งตารางคือการจับ write lock บนตารางที่ด่าน require_login
+# อ่านทุก request เพื่อค่าที่ derive ตอนอ่านก็ได้
+NEW_USER_COLS = {
+    'display_name': "TEXT NOT NULL DEFAULT ''",
+}
+
+
 def _dedupe_attachment_slots(con) -> list:
     """
     รวบแถว attachments ที่ซ้ำคู่ (record_id, book_no) ให้เหลือแถวใหม่สุดแถวเดียว
@@ -648,6 +666,7 @@ def init_db():
                 updated       TEXT
             )
         """)
+        _add_missing_columns(con, 'users', NEW_USER_COLS)
         # token เป็น PRIMARY KEY เพราะทุก request ค้นด้วย token
         # ON DELETE CASCADE ไม่เคยได้ใช้ในทางปฏิบัติ (ไม่มีคำสั่งลบผู้ใช้ มีแต่ปิดบัญชี)
         # แต่ใส่ไว้ให้ schema พูดความจริงว่าเซสชันไม่มีความหมายถ้าไม่มีเจ้าของ
@@ -698,6 +717,13 @@ def init_db():
 # จองไว้ตลอดไป (ไม่มีคำสั่งลบบัญชี) ถ้ารับอักษรนอก ASCII จะมีคู่ที่หน้าตาเหมือนกันสนิท
 # แต่เป็นคนละบัญชี เช่น 'admin' ที่ a เป็นอักษรซีริลลิก — คนอ่าน log แยกไม่ออกด้วยตา
 USERNAME_RE = re.compile(r'^[a-z0-9._-]{3,32}$')
+
+# เพดานความยาวของชื่อ-นามสกุลที่แสดง — ยาวพอสำหรับคำนำหน้าแบบเต็มบวกยศบวกชื่อไทย
+ACCOUNT_NAME_MAX = 100
+
+# ข้อความเดียวสำหรับ "ชื่อผู้ใช้นี้มีอยู่แล้ว" ทั้งฝั่ง CLI และฝั่ง HTTP — ไม่มีชื่อที่
+# client ส่งมาประกอบอยู่ข้างใน จึงไม่มีทางยาวเกินเพดานของ toast
+DUPLICATE_USER_MSG = 'มีผู้ใช้ชื่อนี้อยู่แล้ว'
 
 # ใช้เผาเวลาให้เท่ากันตอนชื่อผู้ใช้ไม่มีอยู่จริง (ดู authenticate)
 # สร้างครั้งแรกที่ต้องใช้ ไม่ใช่ตอน import — scrypt จงใจคิดช้า การสร้างตอน import
@@ -751,6 +777,78 @@ def password_problem(password) -> str:
     return ''
 
 
+def normalize_account_name(name) -> str:
+    """
+    ทำชื่อ-นามสกุลที่แสดงให้เป็นรูปแบบมาตรฐาน — คู่กับ normalize_username
+
+    ตัดช่องว่างหัวท้ายและบีบช่องว่างกลางให้เหลือช่องเดียว 'สมชาย   ใจดี' กับ
+    'สมชาย ใจดี' ต้องเป็นชื่อเดียวกันในตาราง ไม่ใช่สองแถวที่เรียงแล้วอยู่ห่างกัน และ
+    ไม่ใช่สองค่าที่ทำให้การกดบันทึกซ้ำนับเป็นการแก้ไขทุกครั้ง
+
+    **ไม่** lowercase (ต่างจาก username) และ **ไม่** ตัดอักษรไทย ห้ามใช้
+    sanitize_attachment_name() ตรงนี้ — ตัวนั้นล้างชื่อไฟล์ที่อัปโหลด คนละเรื่องกัน
+
+    Parameters:
+        name: ค่าที่รับมาจากฟอร์มหรือ argv (อะไรก็ได้ รวมถึง None)
+
+    Returns:
+        str: ชื่อที่พร้อมตรวจและบันทึก (คืน '' ได้)
+    """
+    return re.sub(r'\s+', ' ', str(name or '')).strip()
+
+
+def account_name_problem(name: str) -> str:
+    """
+    ตรวจชื่อ-นามสกุลที่แสดง — สมาชิกตัวที่สามของตระกูล *_problem
+
+    "ว่าง" ถือว่าผิดที่นี่ ทั้งที่คอลัมน์ใน DB ยังรับ '' ได้ สองเรื่องนี้ต่างกันจริง:
+    *การไม่ตั้งชื่อ* (บัญชีแรกที่สร้างจาก CLI ตอนติดตั้ง) ไม่ใช่ *การตั้งชื่อว่าง*
+    (คนนั่งหน้าฟอร์มแล้วไม่พิมพ์) ฟังก์ชันนี้จึงถูกเรียกเฉพาะตอนมีคนตั้งชื่อ
+
+    Parameters:
+        name (str): ชื่อที่ผ่าน normalize_account_name() มาแล้ว
+
+    Returns:
+        str: ข้อความบอกปัญหา (สั้นกว่า 80 ตัวอักษร) หรือ '' ถ้าผ่าน
+    """
+    if not name:
+        return 'กรุณากรอกชื่อ-นามสกุล'
+    if len(name) > ACCOUNT_NAME_MAX:
+        return f'ชื่อ-นามสกุลต้องยาวไม่เกิน {ACCOUNT_NAME_MAX} ตัวอักษร'
+    if re.search(r'[\x00-\x1f\x7f]', name):
+        return 'ชื่อ-นามสกุลมีอักขระที่ใช้ไม่ได้'
+    return ''
+
+
+def role_problem(role) -> str:
+    """
+    ตรวจว่าค่า role ที่รับมาเป็นหนึ่งใน ROLES — ด่านรูปร่างข้อมูล ไม่ใช่ด่านสิทธิ์
+
+    แยกจาก permission_problem โดยตั้งใจ: {"role": "manager"} คือ body ที่ผิดรูป (422)
+    ไม่ใช่การขอสิทธิ์เกินตัว (403) การตอบ 403 ให้ค่าที่ไม่มีอยู่จริงคือการบอกว่า
+    "มีบทบาทนั้นอยู่แต่คุณสิทธิ์ไม่ถึง" ซึ่งไม่จริง
+
+    พอมีด่านนี้ที่ขอบ permission_problem จึงเชื่อได้ว่า new_role อยู่ใน ROLE_RANK แล้ว
+
+    Returns:
+        str: ข้อความบอกปัญหา หรือ '' ถ้าผ่าน
+    """
+    return '' if role in ROLES else 'บทบาทไม่ถูกต้อง'
+
+
+def active_problem(value) -> str:
+    """
+    ตรวจว่าค่าสถานะบัญชีเป็น boolean จริง ไม่ใช่แค่ความ truthy
+
+    {"is_active": "false"} จาก JavaScript คือสตริงที่ truthy ใน Python การรับไว้เฉย ๆ
+    คือการ *เปิด* บัญชีตอนที่คนตั้งใจจะปิด แล้วตอบ 200 ให้ด้วย
+
+    Returns:
+        str: ข้อความบอกปัญหา หรือ '' ถ้าผ่าน
+    """
+    return '' if isinstance(value, bool) else 'สถานะบัญชีต้องเป็น true หรือ false'
+
+
 def hash_password(password: str) -> str:
     """
     แฮชรหัสผ่านด้วย werkzeug (scrypt เป็นค่าเริ่มต้น salt อยู่ในสตริงผลลัพธ์แล้ว)
@@ -782,6 +880,125 @@ def find_user(con, username: str):
     return con.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
 
 
+def get_user(con, user_id: int):
+    """
+    หาผู้ใช้จาก id — คู่กับ find_user ที่ค้นด้วยชื่อ
+
+    คืนคอลัมน์ที่ "การตัดสินใจหนึ่งครั้งของแท็บจัดการผู้ใช้งาน" ต้องใช้ครบพอดี:
+    role กับ id สำหรับกฎอันดับ, display_name กับ is_active สำหรับเทียบว่ามีอะไร
+    เปลี่ยนจริง และ username สำหรับบรรทัด audit ไม่ SELECT * เพราะ password_hash
+    อยู่ในตารางเดียวกันและแถวนี้เดินทางต่อไปถึงโค้ดที่ประกอบ response
+
+    **ข้อควรระวังที่มองไม่เห็น:** SQL ของฟังก์ชันนี้ต้องไม่มีข้อความเดียวกับ
+    AUTH_SQL_MARK (tests/conftest.py) อยู่ข้างใน ซึ่งคือท่อน FROM ของ resolve_session
+    fault injector ใช้ข้อความนั้นยกเว้น query ของด่านตรวจ ถ้า query นี้ไปตรงกับมัน
+    เทสต์ connection-leak ของ /api/users จะเขียวโดยไม่ได้ทดสอบอะไรเลย
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        user_id (int): id ของบัญชี
+
+    Returns:
+        sqlite3.Row | None: แถวใน users หรือ None ถ้าไม่มี
+    """
+    return con.execute(
+        'SELECT id, username, display_name, role, is_active FROM users WHERE id=?',
+        (user_id,)).fetchone()
+
+
+def list_users(con) -> list:
+    """
+    ทุกบัญชีพร้อมจำนวนเซสชันที่ยังไม่หมดอายุ — ยกมาจาก cmd_list ของ manage_users.py
+
+    เดิม query นี้มีอยู่ที่ CLI ที่เดียวและไม่ได้เลือก u.id ซึ่งหน้าจอต้องใช้อ้างแถว
+    ย้ายมาที่นี่แล้วทั้ง CLI และ route อ่านชุดเดียว เพิ่ม id / display_name / created /
+    updated ให้ครบสิ่งที่หน้าจอต้องใช้ CLI ไม่สนคอลัมน์ที่เกินมา
+
+    **ไม่ SELECT password_hash** เจตนาเดียวกับที่ list_attachments ไม่เลือก
+    stored_name: สิ่งที่ไม่ควรออกไปต้องไม่ถูกอ่านเข้ามาตั้งแต่ต้น ไม่ใช่ถูกลบออก
+    ทีหลัง (การลบทีหลังคือขั้นตอนที่คนลืมได้)
+
+    เรียงด้วย u.id ไม่ใช่ u.created หรือ u.username: created เก็บเป็น
+    'dd/mm/YYYY HH:MM' ซึ่งเทียบเป็นสตริงไม่ได้ ('02/01/2026' < '31/12/2025') ส่วน
+    การเรียงตามตัวอักษรเป็นการนำเสนอของผู้อ่านแต่ละทาง ไม่ใช่ลำดับของข้อมูล
+    ลำดับตาม id คือสิ่งที่ get_all ใช้กับ records อยู่แล้ว
+
+    ข้อควรระวังเรื่อง AUTH_SQL_MARK เหมือน get_user: รูปแบบ correlated subquery
+    (FROM users u + subquery FROM sessions s) ไม่ตรงกับ pattern ของด่านอยู่แล้ว
+    **ห้ามเขียนใหม่เป็น LEFT JOIN**
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+
+    Returns:
+        list[sqlite3.Row]: ทุกบัญชี เรียงตาม id พร้อมคอลัมน์ `live`
+    """
+    return con.execute("""
+        SELECT u.id, u.username, u.display_name, u.role, u.is_active, u.locked_until,
+               u.created, u.updated,
+               (SELECT COUNT(*) FROM sessions s
+                 WHERE s.user_id = u.id AND s.expires_at > ?) AS live
+          FROM users u ORDER BY u.id
+    """, (ts_now(),)).fetchall()
+
+
+def account_status(row, now: str) -> str:
+    """
+    สถานะของบัญชีหนึ่งแถว — กฎเดียว อ่านสองทาง (ตารางของ CLI และ JSON ของ API)
+
+    ยกมาจาก cmd_list ซึ่งเคยดูเหมือน presentation logic ของ CLI มันไม่ใช่: มันคือ
+    นโยบายการล็อก (is_active + locked_until เทียบกับเวลาปัจจุบัน) ถ้าไม่ยกขึ้นมา
+    ฝั่ง JS จะต้อง derive เองจากข้อมูลดิบ ซึ่งแปลว่า locked_until ต้องถูกส่งออกไป
+    ให้ client และนโยบายการล็อกจะมีฉบับที่สองในภาษาที่สอง
+
+    **ลำดับของเงื่อนไขเป็นส่วนหนึ่งของกฎ**: ปิดบัญชีชนะล็อกชั่วคราว บัญชีที่ปิดแล้ว
+    และยังมี locked_until ค้างจากเดือนก่อนต้องอ่านว่า "ปิดบัญชี" ไม่ใช่
+    "ล็อกชั่วคราว" ซึ่งจะทำให้แอดมินนั่งรอให้มันหายเองทั้งที่มันไม่หาย
+
+    รับ `now` เข้ามาแทนที่จะเรียก ts_now() เอง ด้วยสองเหตุผล: ทุกแถวในหน้าเดียวถูก
+    ตัดสินด้วยเวลาเดียวกัน (แถวที่อ่านนาฬิกาคนละครั้งอาจถูกตัดสินคนละเวลา) และ
+    ฟังก์ชันยังบริสุทธิ์ เทสต์ปักเวลาได้โดยไม่ต้อง freeze นาฬิกา
+
+    Parameters:
+        row: แถวที่มีคอลัมน์ is_active และ locked_until
+        now (str): เวลาปัจจุบันรูปแบบ ts_now() — ห้ามส่งรูปแบบ now_str() ที่เทียบไม่ได้
+
+    Returns:
+        str: STATUS_ACTIVE | STATUS_DISABLED | STATUS_LOCKED
+    """
+    if not row['is_active']:
+        return STATUS_DISABLED
+    if row['locked_until'] and row['locked_until'] > now:
+        return STATUS_LOCKED
+    return STATUS_ACTIVE
+
+
+def sortable_stamp(stamp: str) -> str:
+    """
+    'dd/mm/YYYY HH:MM' (now_str) → 'YYYY-MM-DD HH:MM' ที่เทียบเป็นสตริงแล้วเรียงตามเวลาได้
+
+    users.created / users.updated เก็บด้วย now_str() ซึ่ง **เรียงไม่ได้**:
+    '02/01/2026' < '31/12/2025' ตามตัวอักษร ตารางจัดการผู้ใช้งานมีคอลัมน์ "วันที่สร้าง"
+    กับ "แก้ไขล่าสุด" ที่กดเรียงได้ทั้งคู่ และ updated ไม่มี id ให้ใช้แทน
+
+    ทางที่ถูกตามกฎ Comparable time คือคอลัมน์พวกนี้ควรเกิดมาเป็น ts_now() ตั้งแต่แรก
+    การแก้ย้อนหลังต้องเขียนข้อมูลเดิมใหม่ทั้งตารางบวกแก้ทุกจุดที่เขียน เพื่อคอลัมน์ที่
+    จนถึงวันนี้ยังไม่มีใครอ่าน จึงแปลงที่ขอบตอนอ่านแทน และฟังก์ชันนี้เป็นที่เดียวที่
+    รู้เรื่องหนี้ก้อนนี้
+
+    แปลงไม่ได้ (ว่าง รูปแบบอื่น หรือข้อมูลที่แก้มือผ่าน fix_db.py) → คืน '' ซึ่งเรียง
+    ไปอยู่ท้ายสุด ไม่ใช่โยน exception กลางการประกอบ response ของทั้งตาราง
+
+    Parameters:
+        stamp (str): ค่าจากคอลัมน์ created หรือ updated
+
+    Returns:
+        str: 'YYYY-MM-DD HH:MM' หรือ ''
+    """
+    m = re.fullmatch(r'(\d{2})/(\d{2})/(\d{4})[ T](\d{2}:\d{2})', str(stamp or '').strip())
+    return f'{m.group(3)}-{m.group(2)}-{m.group(1)} {m.group(4)}' if m else ''
+
+
 def count_users(con) -> int:
     """
     นับจำนวนบัญชีทั้งหมด (รวมที่ปิดอยู่)
@@ -799,15 +1016,20 @@ def count_users(con) -> int:
     return con.execute('SELECT COUNT(*) FROM users').fetchone()[0]
 
 
-def create_user(con, username: str, password: str, role: str = ROLE_STAFF) -> int:
+def create_user(con, username: str, password: str, role: str = ROLE_STAFF,
+                display_name: str = '') -> int:
     """
     สร้างบัญชีใหม่ (ผู้เรียก commit เอง)
+
+    display_name มี default เป็น '' ตรงกับ DEFAULT ของคอลัมน์ — "ไม่ได้ตั้งชื่อ"
+    คือสภาพที่ถูกต้องของบัญชีแอดมินตัวแรกที่สร้างจากคอนโซลตอนติดตั้ง
 
     Parameters:
         con (sqlite3.Connection): connection ที่เปิดอยู่
         username (str): ชื่อผู้ใช้ที่ normalize และตรวจแล้ว
         password (str): รหัสผ่านดิบที่ตรวจแล้ว
         role (str): ต้องเป็นค่าใน ROLES (schema มี CHECK กันไว้อีกชั้น)
+        display_name (str): ชื่อ-นามสกุลที่ normalize และตรวจแล้ว
 
     Returns:
         int: id ของผู้ใช้ที่สร้าง
@@ -819,9 +1041,32 @@ def create_user(con, username: str, password: str, role: str = ROLE_STAFF) -> in
     if role not in ROLES:
         raise ValueError(f'role ต้องเป็นหนึ่งใน {ROLES}')
     cur = con.execute(
-        'INSERT INTO users (username, password_hash, role, created, updated) VALUES (?,?,?,?,?)',
-        (username, hash_password(password), role, now_str(), now_str()))
+        'INSERT INTO users (username, password_hash, role, display_name, created, updated) '
+        'VALUES (?,?,?,?,?,?)',
+        (username, hash_password(password), role, display_name, now_str(), now_str()))
     return cur.lastrowid
+
+
+def set_display_name(con, user_id: int, name: str):
+    """
+    ตั้งชื่อ-นามสกุลที่แสดงของผู้ใช้ (ผู้เรียก commit เอง)
+
+    พี่น้องตัวที่สี่ของ set_password / set_role / set_active รูปร่างเดียวกันเป๊ะ
+    รวมถึงการขยับ `updated` ซึ่งเป็นเหตุผลที่ฟังก์ชันนี้มีอยู่แทนที่จะให้ route เขียน
+    UPDATE เอง: กฎ "แก้อะไรก็ต้องขยับ updated" มีเจ้าของคนเดียวต่อคอลัมน์
+
+    ไม่เพิกถอนเซสชัน — การเปลี่ยนชื่อที่แสดงไม่กระทบสิทธิ์หรือความน่าเชื่อถือของเซสชัน
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        user_id (int): ผู้ใช้
+        name (str): ชื่อที่ผ่าน normalize_account_name และ account_name_problem แล้ว
+
+    Returns:
+        None
+    """
+    con.execute('UPDATE users SET display_name=?, updated=? WHERE id=?',
+                (name, now_str(), user_id))
 
 
 def set_password(con, user_id: int, password: str):
@@ -965,14 +1210,18 @@ def resolve_session(con, token: str):
         con (sqlite3.Connection): connection ที่เปิดอยู่
         token (str): ค่าจาก cookie
 
+    คอลัมน์ display_name เดินทางมากับ query นี้เพื่อให้ "ฉันเป็นใคร" มีแหล่งเดียว:
+    หัวจอแสดงชื่อคนไม่ใช่ชื่อผู้ใช้ โดยไม่ต้องยิง query ที่สองใน index() ส่วน FROM
+    ไม่ถูกแตะ AUTH_SQL_MARK ของ fault injector จึงยังจับ query นี้ได้เหมือนเดิม
+
     Returns:
-        sqlite3.Row | None: แถวที่มี user_id, username, role, token, remember
+        sqlite3.Row | None: แถวที่มี user_id, username, display_name, role, token, remember
     """
     if not token:
         return None
     row = con.execute("""
         SELECT s.token, s.expires_at, s.remember,
-               u.id AS user_id, u.username, u.role, u.is_active
+               u.id AS user_id, u.username, u.display_name, u.role, u.is_active
           FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token = ?
     """, (token,)).fetchone()

@@ -86,30 +86,45 @@ def need_user(con, username: str):
 
 
 def cmd_add(con, args):
-    """สร้างบัญชีใหม่"""
+    """
+    สร้างบัญชีใหม่
+
+    ตรวจชื่อซ้ำก่อนถามรหัสผ่าน แล้วยังดัก IntegrityError อีกชั้น ไม่ใช่กฎสองสำเนา:
+    UNIQUE index คือกฎ ส่วนการถามก่อนมีไว้เพื่อไม่ให้คนพิมพ์รหัสผ่านสองรอบทิ้งเปล่า
+    (route ฝั่งเว็บไม่มีการถามก่อน เพราะที่นั่นมันเป็น race จริงและไม่มีใครต้องพิมพ์)
+    """
     username = hr.normalize_username(args.username)
-    problem = hr.username_problem(username)
-    if problem:
-        sys.exit(f'ไม่สำเร็จ: {problem}')
+    name = hr.normalize_account_name(args.name)
+    # --name ไม่บังคับที่นี่ ต่างจากฟอร์มบนเว็บที่บังคับ: คำสั่งนี้คือทางเดียวที่สร้าง
+    # บัญชีแรกได้ และมันถูกเขียนไว้ใน README กับหน้าล็อกอินโดยไม่มี --name
+    # เพิ่มเงื่อนไขที่นี่ = วันที่ติดตั้งใหม่แล้วไม่มีใครเข้าระบบได้เลย
+    # บัญชีที่ไม่ได้ตั้งชื่อจะแสดงเป็นชื่อผู้ใช้ เหมือนแถวที่มีอยู่ก่อนคอลัมน์นี้
+    problems = [hr.username_problem(username)]
+    if name:
+        problems.append(hr.account_name_problem(name))
+    for problem in problems:
+        if problem:
+            sys.exit(f'ไม่สำเร็จ: {problem}')
     if hr.find_user(con, username):
-        sys.exit(f'ไม่สำเร็จ: มีผู้ใช้ชื่อ {username} อยู่แล้ว')
+        sys.exit(f'ไม่สำเร็จ: {hr.DUPLICATE_USER_MSG}')
     password = ask_new_password(username)
     try:
-        hr.create_user(con, username, password, args.role)
+        hr.create_user(con, username, password, args.role, name)
     except sqlite3.IntegrityError:
-        sys.exit(f'ไม่สำเร็จ: มีผู้ใช้ชื่อ {username} อยู่แล้ว')
+        sys.exit(f'ไม่สำเร็จ: {hr.DUPLICATE_USER_MSG}')
     con.commit()
-    print(f'สร้างผู้ใช้ {username} (บทบาท {args.role}) แล้ว')
+    print(f'สร้างผู้ใช้ {username} ({name + ", " if name else ""}บทบาท {args.role}) แล้ว')
 
 
 def cmd_list(con, args):
-    """แสดงบัญชีทั้งหมดพร้อมจำนวนเซสชันที่ยังไม่หมดอายุ"""
-    rows = con.execute("""
-        SELECT u.username, u.role, u.is_active, u.locked_until,
-               (SELECT COUNT(*) FROM sessions s
-                 WHERE s.user_id = u.id AND s.expires_at > ?) AS live
-          FROM users u ORDER BY u.username
-    """, (hr.ts_now(),)).fetchall()
+    """
+    แสดงบัญชีทั้งหมดพร้อมจำนวนเซสชันที่ยังไม่หมดอายุ
+
+    query กับการแปลสถานะอยู่ใน app.py (list_users / account_status) หน้าเว็บอ่าน
+    ก้อนเดียวกัน ที่นี่เหลือเฉพาะการจัดหน้าจอ ซึ่งเป็นของ CLI คนเดียวจริง ๆ
+    """
+    now = hr.ts_now()
+    rows = sorted(hr.list_users(con), key=lambda r: r['username'])
     if not rows:
         print('ยังไม่มีผู้ใช้เลย — สร้างคนแรกด้วย:')
         print('    python manage_users.py add <ชื่อผู้ใช้> --role admin')
@@ -119,13 +134,10 @@ def cmd_list(con, args):
     # ตัวอื่นไม่กินที่เลย) การ pad ข้อความไทยจึงได้ตารางที่เบี้ยวกว่าไม่ pad
     print(f'{"USER":<24} {"ROLE":<6} สถานะ')
     for r in rows:
-        if not r['is_active']:
-            state = 'ปิดบัญชี'
-        elif r['locked_until'] and r['locked_until'] > hr.ts_now():
-            state = 'ล็อกชั่วคราว'
-        else:
-            state = 'ใช้งานได้'
-        print(f'{r["username"]:<24} {r["role"]:<6} {state} — ล็อกอินค้างอยู่ {r["live"]} เครื่อง')
+        state = hr.STATUS_LABELS[hr.account_status(r, now)]
+        name = (r['display_name'] or '').strip()
+        print(f'{r["username"]:<24} {r["role"]:<6} {state} — '
+              f'{name or "(ยังไม่ได้ตั้งชื่อ)"} ล็อกอินค้างอยู่ {r["live"]} เครื่อง')
 
 
 def cmd_passwd(con, args):
@@ -193,6 +205,7 @@ def build_parser():
 
     a = sub.add_parser('add', help='สร้างบัญชีใหม่')
     a.add_argument('username')
+    a.add_argument('--name', default='', help='ชื่อ-นามสกุลที่แสดงในหน้าจัดการผู้ใช้งาน')
     a.add_argument('--role', choices=hr.ROLES, default=hr.ROLE_STAFF)
     a.set_defaults(func=cmd_add)
 

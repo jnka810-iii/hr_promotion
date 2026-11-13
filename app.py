@@ -7,7 +7,8 @@ DB เก็บเฉพาะ stored_name (UUID filename) และ filename (�
 """
 
 import os, re, sys, socket, sqlite3, threading, time, base64, json, uuid, shutil, logging, secrets
-from contextlib import closing
+from collections import namedtuple
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 from functools import wraps
 from logging.handlers import RotatingFileHandler
@@ -86,8 +87,32 @@ LOGIN_LOCK_MINUTES     = 5
 # การแปะกระดาษคือการพังจริง ไม่ใช่การพังทางทฤษฎี
 PASSWORD_MIN_LEN       = 8
 # บทบาททั้งหมดที่มี — กฎนี้อยู่ใน schema ด้วย (CHECK constraint ของ users.role)
+# **ลำดับใน tuple นี้คือลำดับสิทธิ์** สูงสุดอยู่หน้า ซึ่งเมื่อก่อนเป็นแค่ลำดับที่เผอิญ
+# เขียน แต่ตอนนี้ ROLE_RANK derive มาจากมัน เพิ่มบทบาทกลางวันหน้าต้องแทรกให้ตรง
+# ตำแหน่งสิทธิ์ แล้วการเทียบสิทธิ์ทุกจุดตามไปเอง — ไม่มีรายการบทบาทชุดที่สองให้ลืมแก้
+# (test_roles_tuple_is_ordered_most_privileged_first กันลำดับนี้ไว้)
 ROLE_ADMIN, ROLE_STAFF = 'admin', 'staff'
 ROLES                  = (ROLE_ADMIN, ROLE_STAFF)
+
+# อันดับสิทธิ์เป็นตัวเลขที่เทียบกันได้ — กฎทั้งหมดของการจัดการบัญชีคือ "ห้ามให้สิทธิ์
+# สูงกว่าของตัวเอง และห้ามลงมือกับบัญชีที่สิทธิ์สูงกว่าของตัวเอง" ซึ่งเขียนเป็นการ
+# เทียบเลขได้ประโยคเดียว ไม่ใช่ if ซ้อนกันทีละ route
+ROLE_RANK = {role: len(ROLES) - i for i, role in enumerate(ROLES)}
+
+# ป้ายไทยของบทบาทและของสถานะบัญชี อยู่ฝั่ง server ที่เดียวเพราะมีผู้อ่านสามทาง:
+# หัวจอ (Jinja), ตารางจัดการผู้ใช้งาน (JSON) และ manage_users.py ถ้าฝั่ง JS มี map
+# ของตัวเอง วันที่เพิ่มบทบาทที่สาม หน้าเว็บจะโชว์คำว่า 'manager' ดิบ ๆ ให้ผู้ใช้อ่าน
+# โดยไม่มีอะไรส่งเสียง
+ROLE_LABELS = {ROLE_ADMIN: 'ผู้ดูแลระบบ', ROLE_STAFF: 'เจ้าหน้าที่'}
+
+# สถานะของบัญชีหนึ่งเดินทางเป็น "รหัส" ไม่ใช่คำไทย — ฝั่ง client เลือกสีจากรหัส
+# การให้มันเทียบสตริงไทยคือการเขียนกฎสถานะเป็นฉบับที่สองในภาษาที่สอง
+STATUS_ACTIVE, STATUS_DISABLED, STATUS_LOCKED = 'active', 'disabled', 'locked'
+STATUS_LABELS = {
+    STATUS_ACTIVE:   'ใช้งานได้',
+    STATUS_DISABLED: 'ปิดบัญชี',
+    STATUS_LOCKED:   'ล็อกชั่วคราว',
+}
 
 
 # ────────────────────────────────────────────────
@@ -1362,6 +1387,147 @@ def require_admin(view):
             return jsonify({'error': FORBIDDEN_MSG}), 403
         return view(*args, **kwargs)
     return wrapped
+
+
+# ────────────────────────────────────────────────
+# สิทธิ์ของแท็บจัดการผู้ใช้งาน
+#
+# กฎทั้งหมดอยู่ในโครงสร้างข้อมูลตัวเดียว (USER_ACTIONS) อ่านด้วยฟังก์ชันบริสุทธิ์
+# ตัวเดียว (permission_problem) ที่ไม่รู้จัก Flask, sqlite3 หรือ g — ทดสอบได้ตรง ๆ
+# ด้วยตารางความจริง และมีผู้อ่านสองทางที่ต้องตอบตรงกันเสมอ: ด่านที่ปฏิเสธ 403
+# กับตัว serialize ที่บอกหน้าจอว่าจะวาดปุ่มไหน ปุ่มที่เห็นจึงเป็น "ผล" ของกฎ
+# ไม่ใช่สำเนาที่สองของกฎในภาษาที่ไม่มีเทสต์ครอบ
+#
+# คำขอตั้งต้นให้ staff "สร้างและแก้ไขได้" ตรง ๆ ซึ่งแปลว่า staff สร้างบัญชี admin
+# หรือรีเซ็ตรหัสผ่าน admin ได้ เส้นแบ่งบทบาทเดียวที่ระบบมีจะหายไปทันที กฎที่บังคับ
+# จริงจึงเป็นกฎอันดับ: **ห้ามให้สิทธิ์สูงกว่าของตัวเอง และห้ามลงมือกับบัญชีที่
+# สิทธิ์สูงกว่าของตัวเอง** บวกข้อห้ามเรื่องบัญชีตัวเองสามข้อที่มีเหตุผลคนละอย่าง
+# ────────────────────────────────────────────────
+
+# ข้อความปฏิเสธ ทุกตัวสั้นกว่า 80 ตัวอักษร — toastError ยกระดับที่ยาวกว่านั้นเป็น
+# alert() ที่ผู้ใช้ต้องกดปิด และทุกตัวเป็นข้อความคงที่ ไม่เคยมีค่าที่ client ส่งมา
+# ประกอบอยู่ข้างใน (ความยาวจึงไม่ขึ้นกับสิ่งที่ใครพิมพ์เข้ามา)
+# FORBIDDEN_MSG ของเดิมถูกใช้ซ้ำสำหรับกรณีบทบาทไม่ถึง ไม่สร้างข้อความที่สองที่พูด
+# เรื่องเดียวกับที่ require_admin พูดอยู่แล้ว
+DENY_TARGET_MSG   = 'ทำรายการกับบัญชีของผู้ดูแลระบบไม่ได้'
+DENY_GRANT_MSG    = 'ให้สิทธิ์สูงกว่าบัญชีของตัวเองไม่ได้'
+SELF_PASSWORD_MSG = 'รหัสผ่านของตัวเองเปลี่ยนที่เมนูเปลี่ยนรหัสผ่าน'
+SELF_ROLE_MSG     = 'เปลี่ยนบทบาทของบัญชีตัวเองไม่ได้'
+SELF_ACTIVE_MSG   = 'ปิดหรือเปิดบัญชีของตัวเองไม่ได้'
+
+# ตัวตนของ "คนที่ลงมือ" และของ "บัญชีที่ถูกกระทำ" — ชนิดเดียวกันทั้งสองฝั่ง เพราะกฎ
+# คือการเทียบอันดับของสองสิ่งที่เป็นของอย่างเดียวกัน
+#
+# มีชนิดนี้แทนการส่ง sqlite3.Row เข้าไปตรง ๆ เพราะคีย์ของสองฝั่งไม่เหมือนกัน:
+# g.user ใช้ 'user_id' (มาจาก u.id AS user_id ใน resolve_session) ส่วนแถวในตาราง
+# users ใช้ 'id' การแปลงเป็น Account ที่ขอบทำให้ภายในมีชื่อคีย์ชุดเดียว ถ้าปล่อยให้
+# สลับกันได้ การเทียบ "นี่คือบัญชีของฉันหรือเปล่า" จะเงียบ ๆ ตอบผิด
+Account = namedtuple('Account', 'user_id role')
+
+# min_role     — บทบาทต่ำสุดที่ลงมือได้ โดยยังไม่ดูเป้าหมาย (เทียบด้วย ROLE_RANK)
+# needs_target — ต้องมีบัญชีเป้าหมาย acting_on บังคับว่า route ต้องส่ง uid มา
+# self_denial  — '' = ทำกับบัญชีตัวเองได้, สตริง = ทำไม่ได้ **และนี่คือข้อความที่
+#                ผู้ใช้เห็น** เก็บธงกับเหตุผลไว้ช่องเดียวกันเพื่อไม่ให้มี bool ชุดที่
+#                สองมาเลื่อนออกจากข้อความ และไม่ให้มีสภาพ "ห้ามแต่ไม่มีเหตุผลจะบอก"
+# grants_role  — action นี้มอบบทบาท acting_on บังคับว่า route ต้องบอกว่ามอบบทบาทใด
+# field        — ชื่อช่องใน body ของ PATCH ที่ action นี้กั้นอยู่ ('' = ไม่ใช่ช่อง
+#                ของ PATCH) USER_FIELDS derive มาจากช่องนี้
+UserAction = namedtuple('UserAction', 'min_role needs_target self_denial grants_role field')
+
+# กฎสิทธิ์ของการจัดการบัญชีทั้งหมดอยู่ที่นี่ ที่เดียว ทั้ง route ทั้ง template ทั้ง CLI
+# เขียนด้วย keyword ทุกตัวโดยตั้งใจ: ลืมฟิลด์ใดจะเป็น TypeError ที่อ่านออกว่าขาดอะไร
+# ไม่ใช่ค่าที่เลื่อนตำแหน่งกันแล้วยังสร้างได้
+USER_ACTIONS = {
+    # ใครที่ล็อกอินได้ก็เห็นว่าใครใช้ระบบนี้อยู่ ไม่ใช่ความลับในสำนักงานเดียวกัน และ
+    # หน้าจอที่เห็นแต่บัญชีตัวเองก็ไม่มีประโยชน์กับใคร
+    'user.list': UserAction(
+        min_role=ROLE_STAFF, needs_target=False, self_denial='',
+        grants_role=False, field=''),
+
+    # staff สร้างบัญชีได้ แต่กฎอันดับคุมไว้ว่าสร้างได้แค่ระดับของตัวเอง
+    'user.create': UserAction(
+        min_role=ROLE_STAFF, needs_target=False, self_denial='',
+        grants_role=True, field=''),
+
+    # แก้ชื่อที่แสดงของตัวเองได้ เป็น action เดียวในสี่ตัวที่ยอม เพราะไม่มีทางล็อก
+    # ตัวเองออกจากระบบด้วยการเปลี่ยนชื่อที่แสดงของตัวเอง
+    'user.rename': UserAction(
+        min_role=ROLE_STAFF, needs_target=True, self_denial='',
+        grants_role=False, field='display_name'),
+
+    # ห้ามรีเซ็ตรหัสผ่านของตัวเองทางนี้ แม้เป็น admin: มันคือการตั้งรหัสใหม่โดย
+    # **ไม่ต้องรู้รหัสเดิม** ซึ่งเป็นสิ่งเดียวที่ /change-password กันไว้ (ใครนั่งหน้า
+    # เครื่องที่เปิดค้างก็ยึดบัญชีได้ทันที — ดู docstring ของ change_password)
+    'user.password': UserAction(
+        min_role=ROLE_STAFF, needs_target=True, self_denial=SELF_PASSWORD_MSG,
+        grants_role=False, field=''),
+
+    # ลดบทบาทตัวเองจาก admin เป็น staff = ล็อกตัวเองออกจากทุกปุ่มของ admin โดยไม่มี
+    # ทางกลับ นอกจากไปพิมพ์ที่เครื่องเซิร์ฟเวอร์
+    'user.role': UserAction(
+        min_role=ROLE_ADMIN, needs_target=True, self_denial=SELF_ROLE_MSG,
+        grants_role=True, field='role'),
+
+    # ปิดบัญชีตัวเอง = set_active ไล่เซสชันตัวเองออกทันทีใน request เดียวกัน แล้ว
+    # ล็อกอินกลับไม่ได้อีกเลย (ด้าน "เปิดบัญชีตัวเอง" ไปไม่ถึงอยู่แล้วเพราะบัญชีที่
+    # ปิดอยู่มีเซสชันไม่ได้ — ธงตัวเดียวครอบทั้งสองทิศจึงไม่มีต้นทุน)
+    'user.active': UserAction(
+        min_role=ROLE_ADMIN, needs_target=True, self_denial=SELF_ACTIVE_MSG,
+        grants_role=False, field='is_active'),
+}
+
+# derive ไม่ใช่รายการที่เขียนมือ — action ที่เจ็ดเข้ามาเองโดยไม่ต้องมีใครไปเติม
+# ตัว serialize ใช้ตัวนี้คิดว่าแต่ละแถวทำอะไรได้บ้าง (row['can'])
+TARGET_ACTIONS = tuple(a for a, r in USER_ACTIONS.items() if r.needs_target)
+
+
+def permission_problem(actor: Account, action: str,
+                       target: Account = None, new_role: str = None) -> str:
+    """
+    ตัดสินว่า actor ทำ action นี้ได้หรือไม่ — ฟังก์ชันบริสุทธิ์ตัวเดียวที่อ่าน USER_ACTIONS
+
+    คืนข้อความไทยหรือ '' รูปแบบเดียวกับ username_problem / password_problem ทั้งตระกูล
+    คนที่มาเขียนโค้ดใหม่แล้วลอกตัวอย่างที่ใกล้ที่สุดจะได้รูปร่างที่ถูก
+
+    **ลำดับการตรวจเป็นส่วนหนึ่งของคำตอบ** เพราะข้อความที่ผู้ใช้เห็นต้องเป็นเหตุผลที่
+    ตรงที่สุด: staff กดเปลี่ยนบทบาทของแอดมินควรได้ยินว่า "ต้องเป็นผู้ดูแลระบบ"
+    (เรื่องแรกที่ผิด) ไม่ใช่ "ทำรายการกับบัญชีของผู้ดูแลระบบไม่ได้" ซึ่งทำให้เข้าใจว่า
+    ถ้าเป้าหมายเป็น staff ก็จะทำได้
+
+    **เงื่อนไขก่อนเรียก (ด่านที่ขอบตรวจมาแล้ว ข้างในเชื่อ):** `action` ต้องเป็นคีย์ใน
+    USER_ACTIONS และ `new_role` ถ้าไม่ใช่ None ต้องอยู่ใน ROLES แล้ว (route เรียก
+    role_problem ก่อน) ผิดเงื่อนไขนี้คือบั๊กของโปรแกรมเมอร์ ฟังก์ชันปล่อย KeyError
+    ให้ดังแทนที่จะเดาแล้วตอบ 403 ที่อ่านแล้วเข้าใจผิด
+
+    Parameters:
+        actor (Account):         คนที่กำลังลงมือ
+        action (str):            คีย์ใน USER_ACTIONS
+        target (Account | None): บัญชีที่ถูกกระทำ None เมื่อ action ไม่มีเป้าหมาย
+        new_role (str | None):   บทบาทที่กำลังมอบ ตรวจรูปแบบมาแล้ว
+
+    Returns:
+        str: ข้อความไทยสั้นกว่า 80 ตัวอักษร หรือ '' เมื่ออนุญาต
+    """
+    rule = USER_ACTIONS[action]
+
+    if ROLE_RANK[actor.role] < ROLE_RANK[rule.min_role]:
+        return FORBIDDEN_MSG
+
+    if new_role is not None and ROLE_RANK[new_role] > ROLE_RANK[actor.role]:
+        return DENY_GRANT_MSG
+
+    if target is None:
+        return ''
+
+    # ข้อความอยู่ใน rule เพราะเหตุผลที่ห้ามต่างกันจริงทั้งสาม action
+    if target.user_id == actor.user_id and rule.self_denial:
+        return rule.self_denial
+
+    # เท่ากันทำได้ — staff แก้บัญชีของ staff คนอื่นได้
+    if ROLE_RANK[target.role] > ROLE_RANK[actor.role]:
+        return DENY_TARGET_MSG
+
+    return ''
 
 
 @app.route('/login', methods=['GET', 'POST'])

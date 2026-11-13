@@ -1,6 +1,6 @@
 @echo off
 REM HR Promotion - server for the local network (LAN)
-REM Other machines on the same network open http://<this machine's IP>:5000
+REM Other machines on the same network open http://<this machine's IP>:5050
 REM Everyone needs an account: python manage_users.py add <username> --role admin
 REM NOTE: traffic is plain HTTP, so passwords are readable by anyone who can capture
 REM       traffic on this network. Accepted on purpose - see docs/adr/0004.

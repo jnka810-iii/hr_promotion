@@ -6,7 +6,7 @@ Flask + SQLite3 + pywebview → Desktop `.exe`
 ## Run
 
 ```bash
-python app.py        # pywebview window (or browser fallback on http://127.0.0.1:5000)
+python app.py        # pywebview window (or browser fallback on http://127.0.0.1:5050)
 ```
 
 Every route needs a login, so a fresh install needs an account before it opens at all:
@@ -119,7 +119,7 @@ Single-file backend: [app.py](app.py)
 | Attachment slots | `book_no` must be one of `BOOK_SLOTS` = `{'1','2','3','ann'}`, the four slots the UI has. It arrives straight from the client, so anything else becomes a file no screen shows and no user can delete |
 | Thai JSON | `app.json.ensure_ascii = False` — required everywhere. **Not** `app.config['JSON_AS_ASCII']`: Flask ≥ 2.3 ignores that key silently, which escapes Thai to `\uXXXX` and grows the payload ~23% |
 | BASE_DIR | Resolves for both `python app.py` and PyInstaller `.exe` via `sys.executable` check |
-| Port | 5000 (hardcoded) |
+| Port | 5050 (hardcoded, `PORT` in [app.py](app.py)). The launcher scripts read `app.PORT` rather than repeating the number, so changing it is one line. **Not 5040:** `CDPSvc` (Connected Devices Platform Service) listens on `0.0.0.0:5040` on every Windows 10 and 11 machine, so binding there fails with WinError 10013 and the app never opens. Check a candidate with `netstat -ano | findstr :<port>` before moving it again |
 | Bind host | `_server_bind()` reads `HR_HOST` (default `127.0.0.1`) and `HR_DEBUG` for the no-pywebview path only; the desktop window always binds loopback. `run_server.bat` sets `HR_HOST=0.0.0.0` so the LAN can reach it. **Invariant:** debug is forced off whenever the host is not loopback — the Werkzeug debugger runs arbitrary Python, so debug + LAN is remote code execution. `run.bat` / `run_browser.bat` never set `HR_HOST` |
 | Authentication | `require_login` is a `before_request` hook, **not** a decorator per route: a decorator you forget leaves the new route open and silent, a hook leaves it closed and makes opening one a visible line in `PUBLIC_ENDPOINTS` (`login`, `static` — nothing else). **Invariant:** no exemption for loopback (behind a reverse proxy `remote_addr` becomes `127.0.0.1` for everyone at once) and none for an empty `users` table (that would reopen the door on every restore of the wrong backup — it is a message on the login page instead). The gate also 404s `static/uploads/*`: the PDFs sit under `static/` by accident of layout, and the app only ever links to `/api/attachments/<id>`. Rationale: [docs/adr/0004](docs/adr/0004-the-security-boundary-is-the-office-lan.md) |
 | Session | Row in `sessions` + a `secrets.token_urlsafe(32)` cookie, **not** `flask.session`. No `SECRET_KEY` exists anywhere — `app.secret_key` must stay `None` — and logout/disable/password-change revoke for real. 12 h, or 30 days with "remember me"; expiry slides only when under half the window is left, so one session is written at most once per 6 h instead of taking the write lock on every request. Cookie is `HttpOnly` + `SameSite=Lax` + **not** `Secure` (plain HTTP on the LAN). `SameSite=Lax` is the only CSRF defence in the system — there is no CSRF token, so never change it to `None`. Rationale: [docs/adr/0003](docs/adr/0003-sessions-live-on-the-server-not-in-a-signed-cookie.md) |

@@ -2956,7 +2956,7 @@ def export_csv_server():
 # Desktop launcher
 # ────────────────────────────────────────────────
 
-PORT = 5000
+PORT = 5050
 
 def _backup_db():
     """

@@ -54,7 +54,7 @@ python app.py
 รหัสผ่านทางหน้าจอ ไม่ต้องพิมพ์ต่อท้ายคำสั่ง
 
 - **มี pywebview** → เปิดเป็นหน้าต่างโปรแกรมปกติ
-- **ไม่มี pywebview** → รันเป็น web server เปิด <http://127.0.0.1:5000> ในเบราว์เซอร์เอง
+- **ไม่มี pywebview** → รันเป็น web server เปิด <http://127.0.0.1:5050> ในเบราว์เซอร์เอง
 
 ### ไฟล์เปิดโปรแกรม
 
@@ -201,8 +201,8 @@ hr_promotion/
 อย่าง curl ล็อกอินด้วยกลไกเดียวกัน ไม่มี API key แยก:
 
 ```bash
-curl -c jar -X POST http://127.0.0.1:5000/login -d "username=somchai&password=..."
-curl -b jar http://127.0.0.1:5000/api/records
+curl -c jar -X POST http://127.0.0.1:5050/login -d "username=somchai&password=..."
+curl -b jar http://127.0.0.1:5050/api/records
 ```
 
 | Method | URL | ทำอะไร |

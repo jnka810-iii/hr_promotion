@@ -86,17 +86,17 @@ def test_item5_escaping_costs_payload_size(client, make_record):
     ('   ', 'book_1.pdf'),
     (None, 'book_1.pdf'),
 ])
-def test_item6_sanitize_display_name(raw, expected):
-    assert hr.sanitize_display_name(raw, 'book_1.pdf') == expected
+def test_item6_sanitize_attachment_name(raw, expected):
+    assert hr.sanitize_attachment_name(raw, 'book_1.pdf') == expected
 
 
 def test_item6_sanitize_strips_path_separators():
-    got = hr.sanitize_display_name('../../etc/passwd.pdf', 'book_1.pdf')
+    got = hr.sanitize_attachment_name('../../etc/passwd.pdf', 'book_1.pdf')
     assert '/' not in got and '\\' not in got
 
 
 def test_item6_sanitize_clamps_length():
-    assert len(hr.sanitize_display_name('ก' * 300 + '.pdf', 'book_1.pdf')) == 255
+    assert len(hr.sanitize_attachment_name('ก' * 300 + '.pdf', 'book_1.pdf')) == 255
 
 
 def test_item6_thai_filename_survives_upload_and_download(client, make_record, upload, db, download):

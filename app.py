@@ -247,7 +247,7 @@ def _safe_remove(path: str):
     except Exception:
         pass
 
-def sanitize_display_name(name: str, fallback: str) -> str:
+def sanitize_attachment_name(name: str, fallback: str) -> str:
     """
     ล้างชื่อไฟล์ที่ผู้ใช้ตั้ง ให้เหลือเฉพาะส่วนที่ปลอดภัยพอจะเก็บลง DB และส่งเป็น download_name
 
@@ -1762,7 +1762,7 @@ def upload_attachment(rid):
     6. ถ้า DB ล้มเหลว: rollback แล้วลบไฟล์ที่เพิ่งเขียนทิ้ง (ขั้นตอน compensate)
        เพื่อไม่ให้เกิดไฟล์กำพร้าที่ไม่มี row ชี้ถึง ส่วนไฟล์เก่ายังอยู่ครบคู่กับ row เดิม
 
-    หมายเหตุ: filename ผ่าน sanitize_display_name() ซึ่งเก็บอักษรไทยไว้ครบ
+    หมายเหตุ: filename ผ่าน sanitize_attachment_name() ซึ่งเก็บอักษรไทยไว้ครบ
     (ใช้เป็น download_name ตอนดาวน์โหลด) ชื่อนี้ไม่เคยถูกใช้ประกอบ path บนดิสก์
 
     Parameters:
@@ -1821,7 +1821,7 @@ def upload_attachment(rid):
         if not con.execute('SELECT 1 FROM records WHERE id=?', [rid]).fetchone():
             return jsonify({'error': 'ไม่พบข้อมูล id=' + str(rid)}), 404
 
-    safe_name   = sanitize_display_name(filename, f'book_{book_no}.pdf')
+    safe_name   = sanitize_attachment_name(filename, f'book_{book_no}.pdf')
     stored_name = uuid.uuid4().hex + '.pdf'
     file_path   = _stored_path(stored_name)
 

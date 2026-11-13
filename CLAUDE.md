@@ -6,7 +6,7 @@ Flask + SQLite3 + pywebview → Desktop `.exe`
 ## Run
 
 ```bash
-python app.py        # pywebview window (or browser fallback on http://127.0.0.1:5000)
+python app.py        # pywebview window (or browser fallback on http://127.0.0.1:5050)
 ```
 
 Every route needs a login, so a fresh install needs an account before it opens at all:
@@ -19,8 +19,8 @@ python manage_users.py add <username> --role admin     # prompts for the passwor
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                      # 183 tests, ~6s    — backend
-node --test tests/client.test.mjs     # 19 tests, ~0.4s   — frontend
+python -m pytest                      # 333 tests, ~9s    — backend
+node --test tests/client.test.mjs     # 32 tests, ~0.4s   — frontend
 ```
 
 Two commands, both must pass. `node --test tests/` does **not** work on this platform (node reads
@@ -42,7 +42,7 @@ does): `main()` backs the DB up, so an unpatched one snapshots the **real** data
 repo's `backup/`. Same rule, one more path. The `fail_sql` fixture deliberately avoids `monkeypatch`
 (its `undo()` would restore the real paths mid-test). That injector also records `close()`, so
 `fail_sql.unclosed()` reports connections a route opened and never closed. That is what pins the
-connection invariant under Architecture across all 14 routes, instead of eyeballing each site.
+connection invariant under Architecture, instead of eyeballing each site.
 That injector skips the auth gate's own `SELECT` (matched on `AUTH_SQL_MARK`): failing it would
 kill every request before its route ran and quietly turn the whole connection suite into a test of
 the gate, still green. The gate has its own test that forces `resolve_session` to raise.
@@ -56,6 +56,23 @@ three times per test turns a 3-second suite into a minute. One test pins the rea
 in production, every test would still be green.
 `test_every_route_is_closed_without_a_session` walks Flask's own `url_map`, not a hand-written
 list, so a route added without auth goes red with nobody having to remember this file.
+
+**The connection-leak suite does not extend itself, and that is the trap.** `READ_ROUTES` and
+`WRITE_FAILURES` in [tests/test_api.py](tests/test_api.py) are hand-written, because each entry
+carries a SQL prefix and a request to send that `url_map` cannot know. A new route added without
+appending to them gets the free auth-gate coverage and **zero** coverage of "closes its connection
+when the query fails" and "never leaks exception text". One `WRITE_FAILURES` tuple buys both.
+The account entries target `id` 2 rather than the caller, because aimed at the caller they would
+hit the self-targeting refusal before the injected failure ever ran and both invariants would
+report green having exercised nothing — `test_the_write_failure_target_is_not_the_caller` is what
+makes that silence audible.
+
+The user-management suite lives in [tests/test_users.py](tests/test_users.py). Its registry
+guards are the load-bearing part: a seventh account action cannot ship without a row in
+`USER_ACTIONS` and a written-down verdict for `staff`, so "nobody thought about staff" is not an
+available mistake. What it cannot reach is the interleaved-commit race behind the last-admin rule,
+because Flask's test client orders requests; [tools/verify_user_management.py](tools/verify_user_management.py)
+covers that against a real server.
 No `xfail` is currently parked; when you
 write a test ahead of its fix, mark it `xfail(strict=True)` so the run goes red the moment the
 fix lands and the marker has to be removed, instead of a `skip` that rots silently.
@@ -102,12 +119,14 @@ Single-file backend: [app.py](app.py)
 | Attachment slots | `book_no` must be one of `BOOK_SLOTS` = `{'1','2','3','ann'}`, the four slots the UI has. It arrives straight from the client, so anything else becomes a file no screen shows and no user can delete |
 | Thai JSON | `app.json.ensure_ascii = False` — required everywhere. **Not** `app.config['JSON_AS_ASCII']`: Flask ≥ 2.3 ignores that key silently, which escapes Thai to `\uXXXX` and grows the payload ~23% |
 | BASE_DIR | Resolves for both `python app.py` and PyInstaller `.exe` via `sys.executable` check |
-| Port | 5000 (hardcoded) |
+| Port | 5050 (hardcoded, `PORT` in [app.py](app.py)). The launcher scripts read `app.PORT` rather than repeating the number, so changing it is one line. **Not 5040:** `CDPSvc` (Connected Devices Platform Service) listens on `0.0.0.0:5040` on every Windows 10 and 11 machine, so binding there fails with WinError 10013 and the app never opens. Check a candidate with `netstat -ano | findstr :<port>` before moving it again |
 | Bind host | `_server_bind()` reads `HR_HOST` (default `127.0.0.1`) and `HR_DEBUG` for the no-pywebview path only; the desktop window always binds loopback. `run_server.bat` sets `HR_HOST=0.0.0.0` so the LAN can reach it. **Invariant:** debug is forced off whenever the host is not loopback — the Werkzeug debugger runs arbitrary Python, so debug + LAN is remote code execution. `run.bat` / `run_browser.bat` never set `HR_HOST` |
 | Authentication | `require_login` is a `before_request` hook, **not** a decorator per route: a decorator you forget leaves the new route open and silent, a hook leaves it closed and makes opening one a visible line in `PUBLIC_ENDPOINTS` (`login`, `static` — nothing else). **Invariant:** no exemption for loopback (behind a reverse proxy `remote_addr` becomes `127.0.0.1` for everyone at once) and none for an empty `users` table (that would reopen the door on every restore of the wrong backup — it is a message on the login page instead). The gate also 404s `static/uploads/*`: the PDFs sit under `static/` by accident of layout, and the app only ever links to `/api/attachments/<id>`. Rationale: [docs/adr/0004](docs/adr/0004-the-security-boundary-is-the-office-lan.md) |
 | Session | Row in `sessions` + a `secrets.token_urlsafe(32)` cookie, **not** `flask.session`. No `SECRET_KEY` exists anywhere — `app.secret_key` must stay `None` — and logout/disable/password-change revoke for real. 12 h, or 30 days with "remember me"; expiry slides only when under half the window is left, so one session is written at most once per 6 h instead of taking the write lock on every request. Cookie is `HttpOnly` + `SameSite=Lax` + **not** `Secure` (plain HTTP on the LAN). `SameSite=Lax` is the only CSRF defence in the system — there is no CSRF token, so never change it to `None`. Rationale: [docs/adr/0003](docs/adr/0003-sessions-live-on-the-server-not-in-a-signed-cookie.md) |
-| Roles | `admin` / `staff`, one TEXT column with a `CHECK` constraint so a typo like `Admin` cannot sit in the DB passing every "not an admin" test (SQLite cannot add a CHECK later). `staff` does all day-to-day work; `admin` additionally gets `DELETE /api/records`. **Invariant:** wiping all records must never touch `users` or `sessions` — whoever pressed it would lock themselves out permanently. Hiding the button in the template is tidiness; `require_admin` is the enforcement |
-| Accounts | `manage_users.py` on the server console only — `add` / `list` / `passwd` / `role` / `disable` / `enable` / `logout-all`. **No delete command:** a reused username makes two people indistinguishable in the log, so retired accounts are disabled, which also cuts their sessions immediately. Password policy is length only (≥ 8); scrypt via `werkzeug.security`, which is why `werkzeug==3.1.9` is now pinned explicitly instead of riding along with Flask |
+| Roles | `admin` / `staff`, one TEXT column with a `CHECK` constraint so a typo like `Admin` cannot sit in the DB passing every "not an admin" test (SQLite cannot add a CHECK later). `staff` does all day-to-day work; `admin` additionally gets `DELETE /api/records` and the two account actions `user.role` / `user.active`. **Invariant:** wiping all records must never touch `users` or `sessions` — whoever pressed it would lock themselves out permanently. Hiding the button in the template is tidiness; `require_admin` is the enforcement |
+| Account privileges | `USER_ACTIONS`, a registry of six actions, each naming its minimum role, whether it needs a target, whether it grants a role, and the Thai refusal for targeting yourself. `permission_problem(actor, action, target, new_role)` is the one pure reader and the one place the rule lives: **never grant a role above your own, never act on an account that outranks you**, equal rank allowed. Rank is `ROLE_RANK`, derived from the order of `ROLES`, so a third role is one tuple edit and not a second list (`test_roles_tuple_is_ordered_most_privileged_first` pins that the order is load-bearing). Without this rule the literal brief hands `staff` an admin account in two clicks and `require_admin` stops meaning anything. Rationale: [docs/adr/0005](docs/adr/0005-managing-accounts-moves-into-the-app-except-the-first-one.md) |
+| Last admin | **Invariant:** the DB always holds at least one active `admin`. Banning self-disable and self-demote nearly covers it, but two admins disabling each other in overlapping transactions each pass their own self-check. `acting_on` therefore counts active admins **after** the write and inside SQLite's write lock, and rolls back with 409 when the count reaches zero. A count taken *before* the write reads the request's own snapshot, taken before the lock, so both racers see the same number and both commit. A DB that already has zero active admins (a bad restore, a CLI disable) stays editable: the check asks whether *this* write is the one that empties it. pytest cannot stage the race — `tools/verify_user_management.py` runs it against a real server |
+| Accounts | Two doors, one rule. The **จัดการผู้ใช้งาน** tab behind the login gate, and `manage_users.py` on the server console — `add` / `list` / `passwd` / `role` / `disable` / `enable` / `logout-all`. Both call the same primitives and read the same `users` table; `cmd_list` goes through `list_users` + `account_status` rather than carrying its own query. **The CLI deliberately runs no rank check**: whoever sits at that machine is outside the role system by ADR-0004, and it is the only way back when every admin account is locked or disabled. **The first account is still console-only** — the tab is behind the gate, and an ungated create page is the hole ADR-0004 refuses, so the "a machine with only the `.exe` cannot bootstrap" gap in `spec.md` stays open. **No delete command anywhere, and no `DELETE /api/users` route:** a reused username makes two people indistinguishable in the log, so retired accounts are disabled, which also cuts their sessions immediately. Password policy is length only (≥ 8); scrypt via `werkzeug.security`, which is why `werkzeug==3.1.9` is now pinned explicitly instead of riding along with Flask |
 | Audit | One `log.info` line per mutation carrying the username, into the existing `hr_promotion.log`. No `audit` table: a table with no screen is a table nobody reads, and it would drag in questions (who may read it, may it be deleted, how is it backed up) that are not worth answering yet. Accepted limit: it rotates away at 1 MB × 3 and is only readable on the server machine |
 | Comparable time | `ts_now()` / `ts_after()` return `YYYY-MM-DD HH:MM:SS` and are **not** interchangeable with `now_str()`. `dd/mm/YYYY` sorts `02/01/2026` before `31/12/2025`, so any column answering "has this expired" (`sessions.expires_at`, `users.locked_until`) must use the former |
 
@@ -159,7 +178,7 @@ displaced are never deleted. Measured before the fix: 4 concurrent uploads left 
 
 ```
 users:    id, username (UNIQUE, lowercased), password_hash, role (CHECK admin|staff),
-          is_active, failed_count, locked_until, created, updated
+          is_active, failed_count, locked_until, created, updated, display_name
 sessions: token (PK), user_id (→ users.id ON DELETE CASCADE), expires_at, remember, created
           + INDEX idx_sessions_user ON sessions(user_id)
 ```
@@ -174,6 +193,15 @@ key on `token` cannot serve. Usernames are ASCII-only (`a-z 0-9 . _ -`, 3–32) 
 the audit log and are reserved forever; allowing non-ASCII would admit a Cyrillic `аdmin` that no
 one can tell from the Latin one by eye.
 
+`display_name` is the person's name, separate from `username`, which is a login handle that is
+reserved forever. It is declared **only** in `NEW_USER_COLS` and not in `CREATE TABLE users`, so
+a fresh install and an upgrade run the same `ALTER TABLE` line and the migration is exercised on
+every startup instead of rotting unused (`test_display_name_is_declared_in_exactly_one_place`).
+It is `NOT NULL DEFAULT ''` with no backfill: `''` means "no name recorded", and the
+`display_name or username` fallback is derived once at the read boundary. The web form requires
+a name; `manage_users.py add --name` does not, because that command creates the first account and
+README spells it without one.
+
 Both tables are created by `init_db()`, so an upgraded DB gets them empty and **nobody can open
 the app until `manage_users.py add` runs** — intended, not a bug.
 
@@ -185,7 +213,7 @@ the app until `manage_users.py add` runs** — intended, not a bug.
 | `sanitize_record(d)` | Whitelist RECORD_COLS; serialize eval*_rows → JSON string |
 | `validate_required(allowed)` | Return list of missing Thai field labels |
 | `required_error(missing)` | Build the 422 for missing fields. `error` is what the client shows, so it names the field only when exactly one is missing and counts them otherwise — all 13 labels run to 303 characters, well past the 80 that turns a toast into a blocking `alert()`. The full list goes in `missing` for callers that read it |
-| `sanitize_display_name(name, fallback)` | Clean the original filename for DB + `download_name` — strips path separators and control chars only, **keeps Thai**. Never use `secure_filename()` here: it drops all non-ASCII (`'ประกาศ.pdf'` → `'pdf'`) |
+| `sanitize_attachment_name(name, fallback)` | Clean the original filename for DB + `download_name` — strips path separators and control chars only, **keeps Thai**. Never use `secure_filename()` here: it drops all non-ASCII (`'ประกาศ.pdf'` → `'pdf'`). Named for the filename it cleans, not for a person's name: a people-name sanitizer lives elsewhere |
 | `csv_cell(value)` | Prefix a cell with `'` when it starts with `=`, `+`, `-`, `@`, tab or CR, so Excel shows it as text instead of running it as a formula. CSV quoting does not help: Excel strips the quotes first. Lives at the export, not at input validation, because the export reads the DB directly and `fix_db.py` edits it by hand |
 | `_dedupe_attachment_slots(con)` | Keep the highest `id` per `(record_id, book_no)` and return the displaced files for deletion after commit. Runs before `CREATE UNIQUE INDEX`, because an older DB can already hold duplicates and the index would otherwise raise inside `init_db()`, which stops the app from opening at all |
 | `fail(context, message, status)` | Log the live exception with `log.exception`, return a fixed Thai message. **Call only from inside an `except` block** — `log.exception` reads `sys.exc_info()`, so outside one it records `NoneType: None`. Statuses stay per-route: 422 for an integrity violation in `add_record`, 404 for a record that vanished mid-upload |
@@ -224,12 +252,21 @@ redirect to `/login?next=…`.
 | DELETE | `/api/attachments/<att_id>` | Delete attachment + disk file |
 | GET | `/api/stats` | Totals by result and level |
 | GET | `/api/export/csv` | CSV export (UTF-8 BOM for Excel) |
+| GET | `/api/users` | Every account, plus what the caller may do. Each row carries `can`, the action names permitted against that row, so the page draws buttons instead of re-deriving the rule. Envelope also holds `self_id`, `can_create`, `grantable_roles`, `role_labels`, `status_labels`, `password_hint`. Never ships `password_hash`, `failed_count`, `locked_until`, or raw `is_active` — `status` is the derived `active`/`disabled`/`locked` |
+| POST | `/api/users` | Create — 201, 403 granting above your rank, 409 username taken, 422 bad value. No pre-flight duplicate check: the `UNIQUE` index is the rule and two admins adding one name at once both see it free |
+| PATCH | `/api/users/<id>` | Edit `display_name` / `role` / `is_active`, any subset. The server diffs against the stored row, so an unchanged field is not a change and a re-sent form converges with `changed: []`. Every permission check for every changing field runs before the first write, so a partly permitted edit is refused whole. 409 when it would leave no active admin |
+| PUT | `/api/users/<id>/password` | Set someone else's password and revoke every session of that account. 403 on yourself — that would change a password without knowing the current one, which is what `/change-password` exists to require |
 
 ## Utilities
 
-- [manage_users.py](manage_users.py) — the only way to create or change an account. Backs the DB
-  up before `init_db()`, same order as `main()`, because it may be the first thing run after an
-  upgrade. Passwords come from a prompt, never from `argv` (shell history, process list)
+- [manage_users.py](manage_users.py) — the console door to accounts, and the only way to create
+  the **first** one. Backs the DB up before `init_db()`, same order as `main()`, because it may be
+  the first thing run after an upgrade. Passwords come from a prompt, never from `argv` (shell
+  history, process list). Runs no rank check, on purpose — see the Accounts row
+- [tools/verify_user_management.py](tools/verify_user_management.py) — starts its own server on a
+  throwaway DB, walks the whole privilege boundary over real HTTP, then races two admins at
+  disabling each other 15 times. Covers the two things pytest structurally cannot: interleaved
+  commits, and the real cookie and gate path. Exit 0 = the boundary holds
 - [check_db.py](check_db.py) — inspect DB state
 - [fix_db.py](fix_db.py) — manual DB repair
 - [tests/](tests/) — pytest suite (`conftest.py` holds the temp-DB fixtures)

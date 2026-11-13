@@ -105,8 +105,11 @@ textarea.form-control{resize:vertical}
   </div>
   <div class="d-flex align-items-center gap-2 flex-wrap">
     <span class="mbadge" id="mode-badge"><span class="dot dy"></span>กำลังเชื่อมต่อ...</span>
-    <span class="mbadge" title="บทบาท: {{ current_role }}">
-      <i class="fa fa-user-shield me-1"></i>{{ current_user }}
+    <!-- บทบาทต้องเห็นได้โดยไม่ต้องเอาเมาส์ไปชี้: คนที่ล็อกอินค้างข้ามวันแล้วไม่รู้ว่า
+         ตัวเองเป็นบทบาทไหน จะอ่านปุ่มที่หายไปว่าโปรแกรมพัง ไม่ใช่ว่าสิทธิ์ไม่ถึง -->
+    <span class="mbadge" title="ชื่อผู้ใช้: {{ current_user }}">
+      <i class="fa fa-user-shield me-1"></i>{{ current_name }}
+      <span class="badge bg-light text-dark ms-1">{{ current_role_label }}</span>
     </span>
     <a class="mbadge text-white text-decoration-none" href="{{ url_for('change_password') }}"
        title="เปลี่ยนรหัสผ่านของตัวเอง"><i class="fa fa-key"></i></a>
@@ -131,14 +134,15 @@ textarea.form-control{resize:vertical}
 </div>
 
 <div class="tnav">
-  <button class="tbtn active" onclick="showTab('tab-form',this)"><i class="fa fa-edit me-1"></i>กรอกข้อมูล</button>
-  <button class="tbtn" onclick="showTab('tab-list',this)"><i class="fa fa-list me-1"></i>รายการทั้งหมด <span class="badge bg-danger ms-1" id="badge-count">0</span></button>
-  <button class="tbtn" onclick="showTab('tab-dashboard',this)"><i class="fa fa-chart-bar me-1"></i>สรุปภาพรวม</button>
+  <button class="tbtn active" data-tab="tab-form" onclick="showTab(this)"><i class="fa fa-edit me-1"></i>กรอกข้อมูล</button>
+  <button class="tbtn" data-tab="tab-list" onclick="showTab(this)"><i class="fa fa-list me-1"></i>รายการทั้งหมด <span class="badge bg-danger ms-1" id="badge-count">0</span></button>
+  <button class="tbtn" data-tab="tab-dashboard" onclick="showTab(this)"><i class="fa fa-chart-bar me-1"></i>สรุปภาพรวม</button>
+  <button class="tbtn" data-tab="tab-users" onclick="showTab(this)"><i class="fa fa-users me-1"></i>จัดการผู้ใช้งาน</button>
 </div>
 
 <div class="container-fluid px-3 px-md-4 py-3">
 
-<div id="tab-form">
+<div id="tab-form" class="tabpane">
 <form id="mainForm" novalidate>
   <input type="hidden" id="rec-id">
 
@@ -413,7 +417,7 @@ textarea.form-control{resize:vertical}
 </form>
 </div>
 
-<div id="tab-list" style="display:none">
+<div id="tab-list" class="tabpane" style="display:none">
   <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
     <input type="text" class="form-control" id="search-input"
       placeholder="🔍 ค้นหาชื่อ ตำแหน่ง หน่วยงาน ตำแหน่งเลขที่..."
@@ -454,7 +458,7 @@ textarea.form-control{resize:vertical}
   </div>
 </div>
 
-<div id="tab-dashboard" style="display:none">
+<div id="tab-dashboard" class="tabpane" style="display:none">
   <div class="row g-3 mb-3" id="stat-cards"></div>
   <div class="row g-3">
     <div class="col-12 col-lg-5"><div class="cc"><canvas id="chart-result" height="240"></canvas></div></div>
@@ -462,6 +466,86 @@ textarea.form-control{resize:vertical}
     <div class="col-12 col-lg-6"><div class="cc"><canvas id="chart-sec" height="220"></canvas></div></div>
     <div class="col-12 col-lg-6"><div class="cc"><canvas id="chart-score" height="220"></canvas></div></div>
   </div>
+</div>
+
+<div id="tab-users" class="tabpane" style="display:none">
+
+  <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+    <h5 class="m-0 me-auto"><i class="fa fa-users me-2"></i>จัดการผู้ใช้งาน</h5>
+    <button class="btn btn-primary" id="usr-add-btn" onclick="openUserForm('add')" style="display:none">
+      <i class="fa fa-user-plus me-1"></i>เพิ่มผู้ใช้งาน
+    </button>
+  </div>
+
+  <!-- ฟอร์มแทรกในหน้า ไม่ใช่ modal: ทั้งแอปไม่มี modal สักตัว -->
+  <div class="card mb-3" id="usr-form" style="display:none">
+    <div class="card-body">
+      <h6 class="card-title mb-3" id="usr-form-title"></h6>
+      <div class="row g-2">
+        <div class="col-12 col-md-4" id="usr-f-name">
+          <label class="form-label" for="usr-name">ชื่อ-นามสกุล</label>
+          <input class="form-control" id="usr-name" maxlength="60" autocomplete="off">
+        </div>
+        <div class="col-12 col-md-4" id="usr-f-username">
+          <label class="form-label" for="usr-username">ชื่อผู้ใช้</label>
+          <input class="form-control" id="usr-username" maxlength="32" autocomplete="off">
+          <div class="form-text">a-z 0-9 . _ - ยาว 3-32 ตัว ตั้งแล้วเปลี่ยนไม่ได้</div>
+        </div>
+        <div class="col-12 col-md-4" id="usr-f-role">
+          <label class="form-label" for="usr-role">บทบาท</label>
+          <select class="form-select" id="usr-role"></select>
+        </div>
+        <div class="col-12 col-md-4" id="usr-f-pw">
+          <label class="form-label" for="usr-pw">รหัสผ่าน</label>
+          <input type="password" class="form-control" id="usr-pw" autocomplete="new-password">
+          <div class="form-text" id="usr-pw-hint"></div>
+        </div>
+        <div class="col-12 col-md-4" id="usr-f-pw2">
+          <label class="form-label" for="usr-pw2">รหัสผ่านอีกครั้ง</label>
+          <input type="password" class="form-control" id="usr-pw2" autocomplete="new-password">
+        </div>
+      </div>
+      <div class="mt-3 d-flex gap-2">
+        <button class="btn btn-primary" onclick="submitUserForm()"><i class="fa fa-save me-1"></i>บันทึก</button>
+        <button class="btn btn-outline-secondary" onclick="closeUserForm()">ยกเลิก</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- หัวตารางอยู่ใน markup ไม่ได้วาดด้วย JS: เทสต์ฝั่ง python มองเห็นคอลัมน์ได้
+       ด้วยการอ่าน markup เท่านั้น
+       data-sort คือคีย์ใน row ที่ /api/users ส่งมาจริง -->
+  <div class="table-responsive rounded shadow-sm">
+    <table class="table table-hover align-middle mb-0" id="tbl-users">
+      <thead>
+        <tr>
+          <th style="width:4rem">ลำดับ</th>
+          <th data-sort="name" onclick="sortUsers(this)" style="cursor:pointer">ชื่อ-นามสกุล <i class="fa fa-sort"></i></th>
+          <th data-sort="username" onclick="sortUsers(this)" style="cursor:pointer">ชื่อผู้ใช้ <i class="fa fa-sort"></i></th>
+          <th data-sort="role" onclick="sortUsers(this)" style="cursor:pointer">บทบาท <i class="fa fa-sort"></i></th>
+          <th data-sort="status" onclick="sortUsers(this)" style="cursor:pointer">สถานะ <i class="fa fa-sort"></i></th>
+          <th data-sort="created" onclick="sortUsers(this)" style="cursor:pointer">วันที่สร้าง <i class="fa fa-sort"></i></th>
+          <th data-sort="updated" onclick="sortUsers(this)" style="cursor:pointer">แก้ไขล่าสุด <i class="fa fa-sort"></i></th>
+          <th style="width:7rem">จัดการ</th>
+        </tr>
+      </thead>
+      <tbody id="usr-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="d-flex align-items-center gap-2 mt-2 flex-wrap">
+    <span class="text-muted small">แสดง</span>
+    <select class="form-select form-select-sm" id="usr-per-page" style="width:auto"
+            onchange="setUsersPerPage(this.value)">
+      <option value="10">10</option>
+      <option value="25">25</option>
+      <option value="50">50</option>
+    </select>
+    <span class="text-muted small">รายการ</span>
+    <span class="text-muted small ms-2" id="usr-range"></span>
+    <div class="btn-group btn-group-sm ms-auto" id="usr-pager"></div>
+  </div>
+
 </div>
 
 </div>
@@ -826,24 +910,29 @@ function toastError(err){
   toast(msg,'#dc3545');
   if(msg.length>80) setTimeout(()=>alert('เกิดข้อผิดพลาด:\n\n'+msg),100);
 }
+/* TAB_ENTER — โหลดใหม่ทุกครั้งที่เข้าแท็บ เพื่อให้เห็นข้อมูลล่าสุดโดยไม่ต้องมี
+ * ระบบ sync state ข้ามแท็บ */
+const TAB_ENTER = {
+  // loadAll / loadUsers ไม่ throw แต่ตัววาดตาราง throw เองได้ ถ้าไม่ catch ที่นี่
+  // ความล้มเหลวของการ "วาด" จะกลับไปเงียบเหมือนเดิม
+  'tab-list':      ()=>loadAll().then(renderTable),
+  'tab-dashboard': ()=>loadAll().then(renderDashboard),
+  'tab-users':     ()=>loadUsers().then(renderUsers),
+};
+
 /**
- * showTab — สลับแท็บของ SPA (กรอกข้อมูล / รายการทั้งหมด / สรุปภาพรวม)
- * ใช้วิธีซ่อน/แสดง div ด้วย display แทนการ route จริง และ "โหลดข้อมูลใหม่
- * ทุกครั้งที่เข้าแท็บ list/dashboard" เพื่อให้เห็นข้อมูลล่าสุดเสมอ
- * โดยไม่ต้องมีระบบ sync state ข้ามแท็บ
- * @param {string} id            id ของ div แท็บปลายทาง เช่น 'tab-list'
- * @param {HTMLElement} el       ปุ่มแท็บที่ถูกคลิก (ไว้ย้าย class active)
+ * showTab — สลับแท็บของ SPA
+ * ซ่อน/แสดง div ด้วย display แทนการ route จริง
+ * รายชื่อแท็บอ่านจาก DOM (.tabpane และ data-tab บนปุ่ม) ไม่ใช่อาร์เรย์ในไฟล์นี้
+ * @param {HTMLElement} el  ปุ่มแท็บที่ถูกคลิก (data-tab บอกปลายทาง)
  * @returns {undefined}
  */
-function showTab(id,el){
-  ['tab-form','tab-list','tab-dashboard'].forEach(t=>document.getElementById(t).style.display='none');
-  document.getElementById(id).style.display='';
+function showTab(el){
+  const id=el.dataset.tab;
+  document.querySelectorAll('.tabpane').forEach(p=>{p.style.display = p.id===id ? '' : 'none';});
   document.querySelectorAll('.tbtn').forEach(b=>b.classList.remove('active'));
-  if(el) el.classList.add('active');
-  // loadAll ไม่ throw แล้ว แต่ renderTable/renderDashboard throw เองได้
-  // ถ้าไม่ catch ที่นี่ ความล้มเหลวของการ "วาด" จะกลับไปเงียบเหมือนเดิม
-  if(id==='tab-list')      loadAll().then(renderTable).catch(toastError);
-  if(id==='tab-dashboard') loadAll().then(renderDashboard).catch(toastError);
+  el.classList.add('active');
+  if(TAB_ENTER[id]) TAB_ENTER[id]().catch(toastError);
 }
 
 /* ================================================================
@@ -1472,11 +1561,17 @@ function byId(a,b){
  * statusRow — แถวเดียวกินทุกคอลัมน์ ใช้กับทุกสภาวะที่ไม่มีแถวข้อมูลให้แสดง
  * มีไว้เพราะของเดิมเซ็ต tbody เป็นสตริงว่างเมื่อไม่มีแถว ซึ่งอ่านไม่ออกว่า
  * ว่างจริง กรองจนไม่เหลือ หรือโหลดไม่สำเร็จ — สามอย่างนี้ต้องเห็นต่างกัน
+ * cols มีค่าตั้งต้นเป็น TBL_COLS เพื่อให้ห้าจุดเรียกเดิมและเทสต์ของมันไม่ต้องแก้
+ * @param {string} icon   class ของ Font Awesome
+ * @param {string} msg    ข้อความที่ผู้ใช้อ่าน
+ * @param {boolean|string} retry  ปุ่มลองใหม่: true = retryLoad, string = ชื่อฟังก์ชันอื่น
+ * @param {number} cols   จำนวนคอลัมน์ของตารางที่แถวนี้จะไปอยู่
  */
-function statusRow(icon,msg,retry){
-  return `<tr><td colspan="${TBL_COLS}" class="text-center text-muted py-4">
+function statusRow(icon,msg,retry,cols=TBL_COLS){
+  const call = retry===true ? 'retryLoad()' : retry;
+  return `<tr><td colspan="${cols}" class="text-center text-muted py-4">
     <i class="fa ${icon} me-2"></i>${esc(msg)}${retry?
-    `<button class="btn btn-sm btn-outline-primary ms-3" onclick="retryLoad()">`+
+    `<button class="btn btn-sm btn-outline-primary ms-3" onclick="${call}">`+
     `<i class="fa fa-rotate-right me-1"></i>ลองใหม่</button>`:''}
   </td></tr>`;
 }
@@ -1567,7 +1662,7 @@ async function editRec(id){
   await loadAll();
   const r=allRecords.find(x=>(x._id||x.id)==id);
   if(!r) return;
-  document.querySelectorAll('.tbtn')[0].click();
+  document.querySelector('.tbtn[data-tab="tab-form"]').click();
   setTimeout(async()=>{
     setForm(r); document.getElementById('rec-id').value=id;
     clearForm_filesOnly(); await loadAttachments(id);
@@ -1806,6 +1901,307 @@ function applyRequiredFields(){
 
 /* ── Init ── ติดกฎฟิลด์บังคับ สร้าง UI ช่องอัปโหลด แล้ว reset ฟอร์มเป็นสถานะเริ่มต้น
  * (ต้องเรียง buildFilePanels ก่อน เพราะ clearForm อ้างถึง element ของช่องไฟล์) */
+
+/* ================================================================
+ * จัดการผู้ใช้งาน
+ *
+ * สิทธิ์ทั้งหมดคิดที่ server แล้ว ไฟล์นี้ **ไม่มีการเทียบบทบาทเลยสักที่**
+ * ปุ่มมาจากการกรอง `can` ที่ /api/users ส่งมากับทุกแถว
+ * ================================================================ */
+
+let allUsers   = [];
+let usersMeta  = {};
+/* usersState เป็นเครื่องจักรสถานะคนละตัวกับ loadState โดยตั้งใจ: การโหลดบัญชีล้ม
+ * ต้องไม่ทำให้ตาราง record ประกาศว่าข้อมูลตัวเองเก่า มันมีสถานะมากกว่าหนึ่งตัวคือ
+ * 'offline' เพราะบัญชีอยู่ใน SQLite เท่านั้น ไม่มีฝาแฝดใน LocalStorage การวาด
+ * ตารางเปล่าในโหมดออฟไลน์คือการตอบจากที่เก็บผิดใบ ซึ่งเป็นสิ่งที่ ADR 0001 กันไว้ */
+let usersState = 'loading';   // loading | loaded | stale | failed | offline
+let usrSort    = {key:'name', dir:1};
+let usrPage    = 1;
+let usrPerPage = 10;
+let usrMode    = '';          // '' | 'add' | 'edit' | 'reset'
+let usrEditId  = 0;
+
+const USR_COLS = 8;           // ต้องเท่ากับจำนวน <th> ใน #tbl-users (มีเทสต์ยืนยัน)
+const USR_ROLE_CLS   = {admin:'primary', staff:'secondary'};
+const USR_STATUS_CLS = {active:'success', disabled:'danger', locked:'warning'};
+
+/* ปุ่มในคอลัมน์ "จัดการ" — คีย์คือชื่อ action ที่ server ใช้ใน `can` ตรง ๆ */
+const USR_ACTION_BTN = {
+  'user.rename':   u=>`<button class="btn btn-sm btn-outline-primary me-1 py-0" title="แก้ไข"
+                         onclick="openUserForm('edit',${u.id})"><i class="fa fa-edit"></i></button>`,
+  'user.password': u=>`<button class="btn btn-sm btn-outline-secondary me-1 py-0" title="ตั้งรหัสผ่านใหม่"
+                         onclick="openUserForm('reset',${u.id})"><i class="fa fa-key"></i></button>`,
+  'user.active':   u=>`<button class="btn btn-sm btn-outline-${u.status==='disabled'?'success':'danger'} py-0"
+                         title="${u.status==='disabled'?'เปิดบัญชี':'ปิดบัญชี'}"
+                         onclick="toggleUserActive(${u.id})"><i class="fa fa-${u.status==='disabled'?'user-check':'user-slash'}"></i></button>`,
+};
+
+/**
+ * cmpStamp — เทียบเวลาจาก /api/users ซึ่งเป็น 'YYYY-MM-DD HH:MM' (เทียบ string ได้)
+ * แถวที่ยังไม่มีค่าไปอยู่ท้ายเสมอทั้งสองทิศ กฎเดียวกับที่ตาราง record ใช้กับวันที่:
+ * เทียบ string ดิบจะดันค่าว่างขึ้นบนสุดเวลาเรียงขึ้น เอาที่ว่างมาบังข้อมูลที่ตั้งใจดู
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function cmpStamp(a,b){
+  if(!a&&!b) return 0;
+  if(!a) return 1;
+  if(!b) return -1;
+  return a<b ? -1 : a>b ? 1 : 0;
+}
+
+/**
+ * pageOf — อธิบายหน้าปัจจุบันทั้งหน้าในครั้งเดียว ฟังก์ชันบริสุทธิ์
+ * ตัวเลขท้ายตารางกับแถวที่วาดจริงมาจากการเรียกครั้งเดียวกัน จึงขัดกันไม่ได้
+ * หนีบเลขหน้า "ตอนอ่าน" ไม่ใช่เก็บค่าที่หนีบแล้ว: ปิดบัญชีสุดท้ายของหน้า 3 จาก 3
+ * ไม่งั้นจะค้างอยู่หน้าว่างทั้งที่ข้อมูลยังอยู่
+ * @param {Array} rows
+ * @param {number} page
+ * @param {number} per
+ * @returns {Object}  page, pages, total, from, to, slice
+ *   (เขียนเป็น Object ไม่ใช่ object literal ใน JSDoc เพราะไฟล์นี้เป็น Jinja template
+ *    ปีกกาสองชั้นติดกันคือจุดเริ่มของ print statement ไม่ว่าจะอยู่ในคอมเมนต์หรือไม่)
+ */
+function pageOf(rows,page,per){
+  const total=rows.length;
+  const pages=Math.max(1,Math.ceil(total/per));
+  const p=Math.min(Math.max(1,page),pages);
+  const from=total?(p-1)*per+1:0;
+  const to=Math.min(p*per,total);
+  return {page:p,pages,total,from,to,slice:rows.slice((p-1)*per,p*per)};
+}
+
+/**
+ * loadUsers — ดึงบัญชีทั้งหมดมาเก็บไว้ใน allUsers
+ * **ไม่ throw** เหมือน loadAll: catch ที่นี่ที่เดียว toast แล้วคืน usersState
+ * @returns {Promise<string>} usersState ล่าสุด
+ */
+async function loadUsers(){
+  if(!USE_FLASK){ usersState='offline'; allUsers=[]; usersMeta={}; return usersState; }
+  usersState = allUsers.length ? usersState : 'loading';
+  try{
+    const d=await apiFetch('/api/users');
+    allUsers=d.users||[];
+    usersMeta=d;
+    usersState='loaded';
+  }catch(e){
+    usersState = allUsers.length ? 'stale' : 'failed';
+    toastError(e);
+  }
+  return usersState;
+}
+
+/**
+ * sortUsers — คลิกหัวตารางเพื่อเรียง คลิกซ้ำที่เดิมเพื่อสลับทิศ
+ * @param {HTMLElement} th
+ * @returns {undefined}
+ */
+function sortUsers(th){
+  const key=th.dataset.sort;
+  if(!key) return;
+  usrSort = usrSort.key===key ? {key,dir:-usrSort.dir} : {key,dir:1};
+  usrPage = 1;
+  renderUsers();
+}
+
+function setUsersPerPage(n){ usrPerPage=parseInt(n,10)||10; usrPage=1; renderUsers(); }
+
+function gotoUsersPage(n){ usrPage=n; renderUsers(); }
+
+async function retryUsers(){ await loadUsers(); renderUsers(); }
+
+/**
+ * renderUsers — วาดตารางบัญชีใหม่ทั้งก้อนจาก allUsers
+ * ทุกค่าที่ผู้ใช้กรอกผ่าน esc() เพราะปลายทางคือ innerHTML
+ * @returns {undefined}
+ */
+function renderUsers(){
+  const tb=document.getElementById('usr-tbody');
+  const range=document.getElementById('usr-range');
+  const pager=document.getElementById('usr-pager');
+  const addBtn=document.getElementById('usr-add-btn');
+  addBtn.style.display = usersMeta.can_create ? '' : 'none';
+
+  if(usersState==='offline'){
+    tb.innerHTML=statusRow('fa-plug-circle-xmark',
+      'โหมดออฟไลน์: จัดการผู้ใช้งานต้องเชื่อมต่อกับเซิร์ฟเวอร์',false,USR_COLS);
+    range.textContent=''; pager.innerHTML=''; return;
+  }
+  if(usersState==='loading'){
+    tb.innerHTML=statusRow('fa-spinner','กำลังโหลดบัญชีผู้ใช้...',false,USR_COLS);
+    range.textContent=UNKNOWN; pager.innerHTML=''; return;
+  }
+  if(usersState==='failed'){
+    tb.innerHTML=statusRow('fa-triangle-exclamation','โหลดบัญชีผู้ใช้ไม่สำเร็จ','retryUsers()',USR_COLS);
+    range.textContent=UNKNOWN; pager.innerHTML=''; return;
+  }
+
+  const k=usrSort.key, dir=usrSort.dir;
+  const rows=allUsers.slice().sort((a,b)=>{
+    const r = (k==='created'||k==='updated')
+      ? cmpStamp(a[k],b[k])
+      : String(a[k]??'').localeCompare(String(b[k]??''),'th');
+    // id เป็นตัวตัดสินสุดท้ายเสมอ ด้วยเหตุผลเดียวกับ byId ของตาราง record:
+    // ค่าที่เท่ากันต้องไม่สลับที่กันเองระหว่างการวาดสองครั้ง
+    return r ? r*dir : a.id-b.id;
+  });
+
+  const pg=pageOf(rows,usrPage,usrPerPage);
+  tb.innerHTML = pg.slice.map((u,i)=>`<tr${u.status==='disabled'?' class="text-muted"':''}>
+      <td>${pg.from+i}</td>
+      <td><i class="fa fa-circle-user me-2 text-secondary"></i>${esc(u.name)}${
+          u.is_self?' <span class="badge bg-light text-dark">คุณ</span>':''}</td>
+      <td><code>${esc(u.username)}</code></td>
+      <td><span class="badge bg-${USR_ROLE_CLS[u.role]||'secondary'} bsm">${
+          esc(usrLabel('role_labels',u.role))}</span></td>
+      <td><span class="badge bg-${USR_STATUS_CLS[u.status]||'secondary'} bsm">${
+          esc(usrLabel('status_labels',u.status))}</span>${
+          u.live_sessions?` <span class="text-muted small">${u.live_sessions} เครื่อง</span>`:''}</td>
+      <td style="white-space:nowrap;font-size:.72rem">${esc(fmtStamp(u.created))}</td>
+      <td style="white-space:nowrap;font-size:.72rem">${esc(fmtStamp(u.updated))}</td>
+      <td style="white-space:nowrap">${
+          u.can.map(a=>USR_ACTION_BTN[a]).filter(Boolean).map(f=>f(u)).join('')||
+          '<span class="text-muted small">—</span>'}</td>
+    </tr>`).join('') ||
+    statusRow('fa-inbox','ยังไม่มีบัญชีผู้ใช้ในระบบ',false,USR_COLS);
+
+  range.textContent = pg.total ? `${pg.from}–${pg.to} จาก ${pg.total} รายการ` : '0 รายการ';
+  pager.innerHTML = pg.pages<2 ? '' :
+    `<button class="btn btn-outline-secondary" ${pg.page<=1?'disabled':''}
+       onclick="gotoUsersPage(${pg.page-1})"><i class="fa fa-chevron-left"></i></button>` +
+    Array.from({length:pg.pages},(_,i)=>i+1).map(n=>
+      `<button class="btn btn-${n===pg.page?'primary':'outline-secondary'}"
+         onclick="gotoUsersPage(${n})">${n}</button>`).join('') +
+    `<button class="btn btn-outline-secondary" ${pg.page>=pg.pages?'disabled':''}
+       onclick="gotoUsersPage(${pg.page+1})"><i class="fa fa-chevron-right"></i></button>`;
+}
+
+/**
+ * usrLabel — คำไทยของ role/status จากรายการคู่ที่ server ส่งมา
+ * ไฟล์นี้จึงไม่มีสำเนาของคำแปลเลย ถ้ายังไม่ได้โหลด meta ก็คืนรหัสดิบไปก่อน
+ * @param {string} kind  'role_labels' หรือ 'status_labels'
+ * @param {string} code
+ * @returns {string}
+ */
+function usrLabel(kind,code){
+  const pair=(usersMeta[kind]||[]).find(p=>p[0]===code);
+  return pair ? pair[1] : code;
+}
+
+/**
+ * fmtStamp — 'YYYY-MM-DD HH:MM' จาก API → 'dd/mm/YYYY HH:MM' ที่คนอ่าน
+ * ปีเป็น ค.ศ. เหมือนคอลัมน์ "วันที่บันทึก" ของตาราง record ในโหมดปกติ
+ * @param {string} s
+ * @returns {string}
+ */
+function fmtStamp(s){
+  if(!s) return '';
+  const [d,t]=s.split(' ');
+  const [y,m,dd]=(d||'').split('-');
+  return y ? `${dd}/${m}/${y}${t?' '+t:''}` : s;
+}
+
+/**
+ * openUserForm — เปิดแผงฟอร์มในโหมดใดโหมดหนึ่ง
+ * ชื่อผู้ใช้แก้ไม่ได้หลังสร้าง: มันคือคีย์ในบันทึกว่าใครทำอะไร และถูกจองตลอดไป
+ * @param {string} mode  'add' | 'edit' | 'reset'
+ * @param {number} [id]  id ของบัญชีเป้าหมาย (ไม่ใช้ในโหมด add)
+ * @returns {undefined}
+ */
+function openUserForm(mode,id){
+  const u = id ? allUsers.find(x=>x.id===id) : null;
+  if(mode!=='add'&&!u) return;
+  usrMode=mode; usrEditId=id||0;
+
+  const show=(el,on)=>{document.getElementById(el).style.display = on?'':'none';};
+  show('usr-f-name',    mode!=='reset');
+  show('usr-f-username',mode==='add');
+  show('usr-f-role',    mode==='add'||(mode==='edit'&&u.can.includes('user.role')));
+  show('usr-f-pw',      mode!=='edit');
+  show('usr-f-pw2',     mode!=='edit');
+
+  const roles=(mode==='add'?usersMeta.grantable_roles:usersMeta.role_labels)||[];
+  document.getElementById('usr-role').innerHTML =
+    roles.map(p=>`<option value="${esc(p[0])}">${esc(p[1])}</option>`).join('');
+
+  document.getElementById('usr-form-title').textContent =
+    mode==='add'  ? 'เพิ่มผู้ใช้งาน' :
+    mode==='edit' ? `แก้ไข ${u.name}` : `ตั้งรหัสผ่านใหม่ให้ ${u.name} — ทุกเครื่องของบัญชีนี้จะถูกไล่ออก`;
+  document.getElementById('usr-name').value     = u ? u.display_name : '';
+  document.getElementById('usr-username').value = '';
+  document.getElementById('usr-pw').value='';
+  document.getElementById('usr-pw2').value='';
+  document.getElementById('usr-pw-hint').textContent = usersMeta.password_hint||'';
+  if(u&&mode==='edit') document.getElementById('usr-role').value=u.role;
+  document.getElementById('usr-form').style.display='';
+}
+
+function closeUserForm(){
+  usrMode=''; usrEditId=0;
+  document.getElementById('usr-form').style.display='none';
+}
+
+/**
+ * submitUserForm — ส่งแผงฟอร์มตามโหมดที่เปิดอยู่
+ *
+ * ตรวจฝั่ง client แค่สองอย่าง: ช่องที่โหมดนั้นต้องการต้องไม่ว่าง และรหัสผ่านสองช่อง
+ * ต้องตรงกัน อย่างหลังคือกฎเดียวที่ server มองไม่เห็น (มันได้รับรหัสผ่านไปช่องเดียว)
+ * **ไม่มี regex ชื่อผู้ใช้และไม่มีเลขความยาวรหัสผ่านในไฟล์นี้** ทั้งสองกลับมาเป็น
+ * 422 พร้อมข้อความไทยที่ toastError แสดงให้อยู่แล้ว เขียนซ้ำคือสำเนาที่เลื่อนได้
+ * @returns {Promise<void>}
+ */
+async function submitUserForm(){
+  const name=document.getElementById('usr-name').value.trim();
+  const user=document.getElementById('usr-username').value.trim();
+  const role=document.getElementById('usr-role').value;
+  const pw  =document.getElementById('usr-pw').value;
+  const pw2 =document.getElementById('usr-pw2').value;
+
+  try{
+    if(usrMode==='add'){
+      if(!name||!user||!pw) return toastError(new Error('กรุณากรอกข้อมูลให้ครบทุกช่อง'));
+      if(pw!==pw2)          return toastError(new Error('รหัสผ่านใหม่สองช่องไม่ตรงกัน'));
+      await apiFetch('/api/users','POST',{username:user,display_name:name,password:pw,role});
+      toast('เพิ่มผู้ใช้งานแล้ว');
+    }else if(usrMode==='edit'){
+      if(!name) return toastError(new Error('กรุณากรอกชื่อ-นามสกุล'));
+      const body={display_name:name};
+      if(document.getElementById('usr-f-role').style.display!=='none') body.role=role;
+      await apiFetch(`/api/users/${usrEditId}`,'PATCH',body);
+      toast('บันทึกการแก้ไขแล้ว');
+    }else if(usrMode==='reset'){
+      if(!pw)      return toastError(new Error('กรุณากรอกรหัสผ่านใหม่'));
+      if(pw!==pw2) return toastError(new Error('รหัสผ่านใหม่สองช่องไม่ตรงกัน'));
+      await apiFetch(`/api/users/${usrEditId}/password`,'PUT',{password:pw});
+      toast('ตั้งรหัสผ่านใหม่แล้ว บัญชีนี้ถูกไล่ออกจากทุกเครื่อง');
+    }else return;
+  }catch(e){ return toastError(e); }
+
+  closeUserForm();
+  await loadUsers();
+  renderUsers();
+}
+
+/**
+ * toggleUserActive — ปิดหรือเปิดบัญชี ถามยืนยันก่อนเมื่อเป็นการปิด
+ * @param {number} id
+ * @returns {Promise<void>}
+ */
+async function toggleUserActive(id){
+  const u=allUsers.find(x=>x.id===id);
+  if(!u) return;
+  const turningOn = u.status==='disabled';
+  if(!turningOn && !confirm(`ปิดบัญชี ${u.name}?\nผู้ใช้จะถูกไล่ออกจากทุกเครื่องทันที`)) return;
+  try{
+    await apiFetch(`/api/users/${id}`,'PATCH',{is_active:turningOn});
+    toast(turningOn?'เปิดบัญชีแล้ว':'ปิดบัญชีแล้ว');
+  }catch(e){ return toastError(e); }
+  await loadUsers();
+  renderUsers();
+}
+
 applyRequiredFields();
 buildFilePanels();
 clearForm();

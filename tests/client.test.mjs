@@ -261,3 +261,205 @@ test('กรองจนไม่เหลือ: บอกว่าไม่ต
     'สองสาเหตุนี้แก้คนละวิธี ผู้ใช้ต้องรู้ว่าตัวเองเจออันไหน');
   assert.deepEqual(counts(el), { badge: 4, shown: 0, total: 4 });
 });
+
+// ────────────────────────────────────────────────
+// จัดการผู้ใช้งาน
+// ────────────────────────────────────────────────
+
+const USR = (over = {}) => ({
+  id: 1, username: 'somchai.k', display_name: 'สมชาย ใจดี', name: 'สมชาย ใจดี',
+  role: 'staff', status: 'active', live_sessions: 0,
+  created: '2026-01-02 09:00', updated: '2026-01-02 09:00',
+  is_self: false, can: [], ...over,
+});
+
+const USR_META = (users, over = {}) => ({
+  users, self_id: 99, can_create: true,
+  grantable_roles: [['staff', 'เจ้าหน้าที่']],
+  role_labels:   [['admin', 'ผู้ดูแลระบบ'], ['staff', 'เจ้าหน้าที่']],
+  status_labels: [['active', 'ใช้งานได้'], ['disabled', 'ปิดบัญชี'], ['locked', 'ล็อกชั่วคราว']],
+  password_hint: 'รหัสผ่านต้องยาวอย่างน้อย 8 ตัวอักษร', ...over,
+});
+
+test('แถวสถานะ colspan ตรงกับจำนวนคอลัมน์จริงของ #tbl-users', async () => {
+  const { mod } = await load({ fetch: serverOk([]) });
+  const html = await readFile(new URL('../templates/index.html', import.meta.url), 'utf8');
+  const thead = html.match(/<table[^>]*id="tbl-users"[\s\S]*?<thead>([\s\S]*?)<\/thead>/)[1];
+  const cols = (thead.match(/<th/g) || []).length;
+
+  assert.equal(mod.USR_COLS, cols,
+    'USR_COLS หลุดจากหัวตารางบัญชี แถวสถานะจะกินคอลัมน์ไม่พอดีแล้วตารางเบี้ยว');
+});
+
+test('ทุก data-sort บนหัวตารางบัญชีเป็นคีย์ที่ renderUsers เรียงได้จริง', async () => {
+  const { mod, el } = await load({ fetch: serverOk([]) });
+  const html = await readFile(new URL('../templates/index.html', import.meta.url), 'utf8');
+  const thead = html.match(/<table[^>]*id="tbl-users"[\s\S]*?<thead>([\s\S]*?)<\/thead>/)[1];
+  const keys = [...thead.matchAll(/data-sort="([^"]+)"/g)].map(m => m[1]);
+
+  assert.ok(keys.length >= 4, 'หัวตารางบัญชีไม่มีคอลัมน์ที่เรียงได้เลย');
+  const row = USR();
+  for (const k of keys) {
+    assert.ok(k in row, `หัวตารางเรียงด้วย "${k}" ซึ่ง /api/users ไม่ได้ส่งมา`);
+  }
+  mod.setUsersView({ allUsers: [USR({ id: 1 }), USR({ id: 2, username: 'a.b', name: 'ก' })],
+                     usersMeta: USR_META([]), usersState: 'loaded', usrPage: 1, usrPerPage: 10 });
+  for (const k of keys) {
+    mod.setUsersView({ usrSort: { key: k, dir: 1 } });
+    mod.renderUsers();
+    assert.equal((el['usr-tbody'].innerHTML.match(/<tr/g) || []).length, 2,
+      `เรียงด้วย "${k}" แล้วแถวหาย`);
+  }
+});
+
+test('โหมดออฟไลน์: บอกว่าต้องต่อเซิร์ฟเวอร์ ไม่ใช่วาดตารางเปล่า', async () => {
+  const { mod, el } = await load({ fetch: noServer() });
+  mod.setUseFlask(false);
+
+  const state = await mod.loadUsers();
+
+  assert.equal(state, 'offline', 'โหมดออฟไลน์ต้องมีสถานะของตัวเอง ไม่ใช่ failed');
+  mod.renderUsers();
+  assert.match(el['usr-tbody'].innerHTML, /ออฟไลน์/,
+    'ตารางบัญชีต้องบอกว่าทำไมว่าง ไม่ใช่เงียบ');
+  assert.doesNotMatch(el['usr-tbody'].innerHTML, /ลองใหม่/,
+    'ปุ่มลองใหม่ในโหมดออฟไลน์คือการชวนให้กดซ้ำกับเซิร์ฟเวอร์ที่ไม่เคยมีอยู่');
+});
+
+test('โหลดบัญชีไม่สำเร็จ: ไม่ใช่ตารางว่างเงียบ ๆ และบอกผู้ใช้', async () => {
+  const { mod, el, toasts } = await load({ fetch: serverError() });
+  mod.setUseFlask(true);
+
+  const state = await mod.loadUsers();
+
+  assert.equal(state, 'failed');
+  mod.renderUsers();
+  assert.match(el['usr-tbody'].innerHTML, /โหลดบัญชีผู้ใช้ไม่สำเร็จ/);
+  assert.equal(el['usr-range'].textContent, '—',
+    'ตัวนับต้องเป็น UNKNOWN ตอนโหลดไม่สำเร็จ ไม่ใช่ 0 ซึ่งแปลว่า "ไม่มีบัญชีเลย"');
+  assert.ok(toasts.length, 'ความล้มเหลวต้องถึงผู้ใช้ ไม่ตายใน unhandled rejection');
+});
+
+test('ปุ่มในแถวมาจาก can ที่ server ส่งมา ไม่ได้คิดจากบทบาทเอง', async () => {
+  const { mod, el } = await load({ fetch: serverOk([]) });
+  mod.setUsersView({
+    allUsers: [
+      USR({ id: 1, name: 'แก้ได้', can: ['user.rename', 'user.password'] }),
+      USR({ id: 2, name: 'แตะไม่ได้', role: 'admin', can: [] }),
+    ],
+    usersMeta: USR_META([]), usersState: 'loaded',
+    usrSort: { key: 'id', dir: 1 }, usrPage: 1, usrPerPage: 10,
+  });
+
+  mod.renderUsers();
+  const rows = el['usr-tbody'].innerHTML.split('<tr').slice(1);
+
+  assert.match(rows[0], /openUserForm\('edit',1\)/);
+  assert.match(rows[0], /openUserForm\('reset',1\)/);
+  assert.doesNotMatch(rows[0], /toggleUserActive/,
+    'can ไม่มี user.active ปุ่มปิดบัญชีจึงต้องไม่โผล่');
+  assert.doesNotMatch(rows[1], /openUserForm/,
+    'แถวที่ can ว่างต้องไม่มีปุ่มสักตัว แม้หน้าจอจะเป็นของแอดมิน');
+});
+
+test('ปุ่มเพิ่มผู้ใช้งานโผล่ตาม can_create ไม่ใช่ตามบทบาทที่เดาเอง', async () => {
+  const { mod, el } = await load({ fetch: serverOk([]) });
+
+  mod.setUsersView({ allUsers: [], usersMeta: USR_META([], { can_create: false }),
+                     usersState: 'loaded' });
+  mod.renderUsers();
+  assert.equal(el['usr-add-btn'].style.display, 'none');
+
+  mod.setUsersView({ usersMeta: USR_META([], { can_create: true }) });
+  mod.renderUsers();
+  assert.equal(el['usr-add-btn'].style.display, '');
+});
+
+test('ชื่อที่ผู้ใช้ตั้งถูก escape ก่อนลง innerHTML', async () => {
+  const { mod, el } = await load({ fetch: serverOk([]) });
+  mod.setUsersView({
+    allUsers: [USR({ name: '<img src=x onerror=alert(1)>' })],
+    usersMeta: USR_META([]), usersState: 'loaded', usrPage: 1, usrPerPage: 10,
+  });
+
+  mod.renderUsers();
+
+  assert.doesNotMatch(el['usr-tbody'].innerHTML, /<img src=x/,
+    'ชื่อบัญชีลง innerHTML ตรง ๆ = stored XSS ที่ทุกคนในสำนักงานโดน');
+  assert.match(el['usr-tbody'].innerHTML, /&lt;img/);
+});
+
+test('แบ่งหน้า: ตัวเลขท้ายตารางกับแถวที่วาดมาจากการคิดครั้งเดียวกัน', async () => {
+  const { mod, el } = await load({ fetch: serverOk([]) });
+  const many = Array.from({ length: 24 }, (_, i) => USR({ id: i + 1, username: 'u' + i }));
+  mod.setUsersView({ allUsers: many, usersMeta: USR_META([]), usersState: 'loaded',
+                     usrSort: { key: 'id', dir: 1 }, usrPage: 1, usrPerPage: 10 });
+
+  mod.renderUsers();
+
+  assert.equal((el['usr-tbody'].innerHTML.match(/<tr/g) || []).length, 10);
+  assert.equal(el['usr-range'].textContent, '1–10 จาก 24 รายการ');
+});
+
+test('หน้าที่เกินขอบถูกหนีบตอนอ่าน ไม่ค้างอยู่หน้าว่างทั้งที่ข้อมูลยังอยู่', async () => {
+  const { mod, el } = await load({ fetch: serverOk([]) });
+  // เคยอยู่หน้า 3 แล้วบัญชีลดลงเหลือพอแค่หน้าเดียว
+  mod.setUsersView({ allUsers: [USR()], usersMeta: USR_META([]), usersState: 'loaded',
+                     usrSort: { key: 'id', dir: 1 }, usrPage: 3, usrPerPage: 10 });
+
+  mod.renderUsers();
+
+  assert.equal((el['usr-tbody'].innerHTML.match(/<tr/g) || []).length, 1);
+  assert.equal(el['usr-range'].textContent, '1–1 จาก 1 รายการ');
+});
+
+test('pageOf คิดช่วงที่แสดงได้ตรงกับแถวที่ตัดออกมา', async () => {
+  const { mod } = await load({ fetch: serverOk([]) });
+  const rows = Array.from({ length: 7 }, (_, i) => i);
+
+  assert.deepEqual(mod.pageOf(rows, 1, 3).slice, [0, 1, 2]);
+  assert.deepEqual(mod.pageOf(rows, 3, 3).slice, [6]);
+  assert.equal(mod.pageOf(rows, 3, 3).from, 7);
+  assert.equal(mod.pageOf(rows, 3, 3).to, 7);
+  assert.equal(mod.pageOf([], 1, 10).from, 0, 'ไม่มีแถวเลยต้องเริ่มที่ 0 ไม่ใช่ 1');
+  assert.equal(mod.pageOf([], 1, 10).pages, 1, 'ตารางว่างยังมีหนึ่งหน้าเสมอ');
+});
+
+test('เวลาเรียงได้จาก API กลายเป็นรูปแบบที่คนอ่าน และเรียงตามเวลาจริง', async () => {
+  const { mod } = await load({ fetch: serverOk([]) });
+
+  assert.equal(mod.fmtStamp('2026-11-10 16:53'), '10/11/2026 16:53');
+  assert.equal(mod.fmtStamp(''), '');
+  // 02/01/2026 ต้องมาทีหลัง 31/12/2025 ซึ่งการเทียบ dd/mm/YYYY เป็น string ทำไม่ได้
+  assert.ok(mod.cmpStamp('2025-12-31 23:59', '2026-01-02 00:01') < 0);
+  assert.ok(mod.cmpStamp('2026-01-02 00:01', '') < 0, 'แถวที่ยังไม่มีค่าไปอยู่ท้าย');
+  assert.ok(mod.cmpStamp('', '2026-01-02 00:01') > 0);
+});
+
+test('คำไทยของบทบาทและสถานะมาจาก server ไม่มีสำเนาในหน้าเว็บ', async () => {
+  const { mod, el } = await load({ fetch: serverOk([]) });
+  const html = await readFile(new URL('../templates/index.html', import.meta.url), 'utf8');
+  const script = html.slice(html.indexOf('loadUsers'));
+
+  assert.ok(!script.includes("admin:'ผู้ดูแลระบบ'") && !script.includes('admin: ผู้'),
+    'คำแปลบทบาทต้องมาจาก role_labels ของ server ไม่ใช่ map ซ้ำในไฟล์นี้');
+
+  mod.setUsersView({ allUsers: [USR({ role: 'admin', status: 'locked' })],
+                     usersMeta: USR_META([]), usersState: 'loaded',
+                     usrSort: { key: 'id', dir: 1 }, usrPage: 1, usrPerPage: 10 });
+  mod.renderUsers();
+  assert.match(el['usr-tbody'].innerHTML, /ผู้ดูแลระบบ/);
+  assert.match(el['usr-tbody'].innerHTML, /ล็อกชั่วคราว/);
+});
+
+test('แท็บทุกตัวมีช่องเนื้อหาจริง และรายชื่อแท็บไม่ได้เขียนซ้ำใน JS', async () => {
+  const html = await readFile(new URL('../templates/index.html', import.meta.url), 'utf8');
+  const tabs  = [...html.matchAll(/class="tbtn[^"]*"[^>]*data-tab="([^"]+)"/g)].map(m => m[1]);
+  const panes = [...html.matchAll(/id="(tab-[^"]+)"[^>]*class="tabpane"/g)].map(m => m[1]);
+
+  assert.ok(tabs.includes('tab-users'), 'ไม่มีปุ่มแท็บจัดการผู้ใช้งาน');
+  assert.deepEqual([...tabs].sort(), [...panes].sort(),
+    'ปุ่มแท็บกับช่องเนื้อหาไม่ตรงกัน แท็บที่ไม่มีช่องจะคลิกแล้วหน้าว่าง');
+  assert.doesNotMatch(html, /\['tab-form','tab-list'/,
+    'อาเรย์รายชื่อแท็บกลับมาแล้ว — เพิ่มแท็บแล้วลืมเติมจะได้สองแท็บพร้อมกัน');
+});

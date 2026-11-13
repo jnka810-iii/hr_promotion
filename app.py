@@ -87,26 +87,16 @@ LOGIN_LOCK_MINUTES     = 5
 # การแปะกระดาษคือการพังจริง ไม่ใช่การพังทางทฤษฎี
 PASSWORD_MIN_LEN       = 8
 # บทบาททั้งหมดที่มี — กฎนี้อยู่ใน schema ด้วย (CHECK constraint ของ users.role)
-# **ลำดับใน tuple นี้คือลำดับสิทธิ์** สูงสุดอยู่หน้า ซึ่งเมื่อก่อนเป็นแค่ลำดับที่เผอิญ
-# เขียน แต่ตอนนี้ ROLE_RANK derive มาจากมัน เพิ่มบทบาทกลางวันหน้าต้องแทรกให้ตรง
-# ตำแหน่งสิทธิ์ แล้วการเทียบสิทธิ์ทุกจุดตามไปเอง — ไม่มีรายการบทบาทชุดที่สองให้ลืมแก้
-# (test_roles_tuple_is_ordered_most_privileged_first กันลำดับนี้ไว้)
+# **ลำดับใน tuple นี้คือลำดับสิทธิ์** สูงสุดอยู่หน้า
 ROLE_ADMIN, ROLE_STAFF = 'admin', 'staff'
 ROLES                  = (ROLE_ADMIN, ROLE_STAFF)
 
-# อันดับสิทธิ์เป็นตัวเลขที่เทียบกันได้ — กฎทั้งหมดของการจัดการบัญชีคือ "ห้ามให้สิทธิ์
-# สูงกว่าของตัวเอง และห้ามลงมือกับบัญชีที่สิทธิ์สูงกว่าของตัวเอง" ซึ่งเขียนเป็นการ
-# เทียบเลขได้ประโยคเดียว ไม่ใช่ if ซ้อนกันทีละ route
 ROLE_RANK = {role: len(ROLES) - i for i, role in enumerate(ROLES)}
 
 # ป้ายไทยของบทบาทและของสถานะบัญชี อยู่ฝั่ง server ที่เดียวเพราะมีผู้อ่านสามทาง:
-# หัวจอ (Jinja), ตารางจัดการผู้ใช้งาน (JSON) และ manage_users.py ถ้าฝั่ง JS มี map
-# ของตัวเอง วันที่เพิ่มบทบาทที่สาม หน้าเว็บจะโชว์คำว่า 'manager' ดิบ ๆ ให้ผู้ใช้อ่าน
-# โดยไม่มีอะไรส่งเสียง
+# หัวจอ (Jinja), ตารางจัดการผู้ใช้งาน (JSON) และ manage_users.py
 ROLE_LABELS = {ROLE_ADMIN: 'ผู้ดูแลระบบ', ROLE_STAFF: 'เจ้าหน้าที่'}
 
-# สถานะของบัญชีหนึ่งเดินทางเป็น "รหัส" ไม่ใช่คำไทย — ฝั่ง client เลือกสีจากรหัส
-# การให้มันเทียบสตริงไทยคือการเขียนกฎสถานะเป็นฉบับที่สองในภาษาที่สอง
 STATUS_ACTIVE, STATUS_DISABLED, STATUS_LOCKED = 'active', 'disabled', 'locked'
 STATUS_LABELS = {
     STATUS_ACTIVE:   'ใช้งานได้',
@@ -721,8 +711,6 @@ USERNAME_RE = re.compile(r'^[a-z0-9._-]{3,32}$')
 # เพดานความยาวของชื่อ-นามสกุลที่แสดง — ยาวพอสำหรับคำนำหน้าแบบเต็มบวกยศบวกชื่อไทย
 ACCOUNT_NAME_MAX = 100
 
-# ข้อความเดียวสำหรับ "ชื่อผู้ใช้นี้มีอยู่แล้ว" ทั้งฝั่ง CLI และฝั่ง HTTP — ไม่มีชื่อที่
-# client ส่งมาประกอบอยู่ข้างใน จึงไม่มีทางยาวเกินเพดานของ toast
 DUPLICATE_USER_MSG = 'มีผู้ใช้ชื่อนี้อยู่แล้ว'
 
 # ใช้เผาเวลาให้เท่ากันตอนชื่อผู้ใช้ไม่มีอยู่จริง (ดู authenticate)
@@ -784,9 +772,6 @@ def normalize_account_name(name) -> str:
     ตัดช่องว่างหัวท้ายและบีบช่องว่างกลางให้เหลือช่องเดียว 'สมชาย   ใจดี' กับ
     'สมชาย ใจดี' ต้องเป็นชื่อเดียวกันในตาราง ไม่ใช่สองแถวที่เรียงแล้วอยู่ห่างกัน และ
     ไม่ใช่สองค่าที่ทำให้การกดบันทึกซ้ำนับเป็นการแก้ไขทุกครั้ง
-
-    **ไม่** lowercase (ต่างจาก username) และ **ไม่** ตัดอักษรไทย ห้ามใช้
-    sanitize_attachment_name() ตรงนี้ — ตัวนั้นล้างชื่อไฟล์ที่อัปโหลด คนละเรื่องกัน
 
     Parameters:
         name: ค่าที่รับมาจากฟอร์มหรือ argv (อะไรก็ได้ รวมถึง None)
@@ -889,11 +874,6 @@ def get_user(con, user_id: int):
     เปลี่ยนจริง และ username สำหรับบรรทัด audit ไม่ SELECT * เพราะ password_hash
     อยู่ในตารางเดียวกันและแถวนี้เดินทางต่อไปถึงโค้ดที่ประกอบ response
 
-    **ข้อควรระวังที่มองไม่เห็น:** SQL ของฟังก์ชันนี้ต้องไม่มีข้อความเดียวกับ
-    AUTH_SQL_MARK (tests/conftest.py) อยู่ข้างใน ซึ่งคือท่อน FROM ของ resolve_session
-    fault injector ใช้ข้อความนั้นยกเว้น query ของด่านตรวจ ถ้า query นี้ไปตรงกับมัน
-    เทสต์ connection-leak ของ /api/users จะเขียวโดยไม่ได้ทดสอบอะไรเลย
-
     Parameters:
         con (sqlite3.Connection): connection ที่เปิดอยู่
         user_id (int): id ของบัญชี
@@ -922,10 +902,6 @@ def list_users(con) -> list:
     'dd/mm/YYYY HH:MM' ซึ่งเทียบเป็นสตริงไม่ได้ ('02/01/2026' < '31/12/2025') ส่วน
     การเรียงตามตัวอักษรเป็นการนำเสนอของผู้อ่านแต่ละทาง ไม่ใช่ลำดับของข้อมูล
     ลำดับตาม id คือสิ่งที่ get_all ใช้กับ records อยู่แล้ว
-
-    ข้อควรระวังเรื่อง AUTH_SQL_MARK เหมือน get_user: รูปแบบ correlated subquery
-    (FROM users u + subquery FROM sessions s) ไม่ตรงกับ pattern ของด่านอยู่แล้ว
-    **ห้ามเขียนใหม่เป็น LEFT JOIN**
 
     Parameters:
         con (sqlite3.Connection): connection ที่เปิดอยู่
@@ -980,11 +956,6 @@ def sortable_stamp(stamp: str) -> str:
     users.created / users.updated เก็บด้วย now_str() ซึ่ง **เรียงไม่ได้**:
     '02/01/2026' < '31/12/2025' ตามตัวอักษร ตารางจัดการผู้ใช้งานมีคอลัมน์ "วันที่สร้าง"
     กับ "แก้ไขล่าสุด" ที่กดเรียงได้ทั้งคู่ และ updated ไม่มี id ให้ใช้แทน
-
-    ทางที่ถูกตามกฎ Comparable time คือคอลัมน์พวกนี้ควรเกิดมาเป็น ts_now() ตั้งแต่แรก
-    การแก้ย้อนหลังต้องเขียนข้อมูลเดิมใหม่ทั้งตารางบวกแก้ทุกจุดที่เขียน เพื่อคอลัมน์ที่
-    จนถึงวันนี้ยังไม่มีใครอ่าน จึงแปลงที่ขอบตอนอ่านแทน และฟังก์ชันนี้เป็นที่เดียวที่
-    รู้เรื่องหนี้ก้อนนี้
 
     แปลงไม่ได้ (ว่าง รูปแบบอื่น หรือข้อมูลที่แก้มือผ่าน fix_db.py) → คืน '' ซึ่งเรียง
     ไปอยู่ท้ายสุด ไม่ใช่โยน exception กลางการประกอบ response ของทั้งตาราง
@@ -1050,10 +1021,6 @@ def create_user(con, username: str, password: str, role: str = ROLE_STAFF,
 def set_display_name(con, user_id: int, name: str):
     """
     ตั้งชื่อ-นามสกุลที่แสดงของผู้ใช้ (ผู้เรียก commit เอง)
-
-    พี่น้องตัวที่สี่ของ set_password / set_role / set_active รูปร่างเดียวกันเป๊ะ
-    รวมถึงการขยับ `updated` ซึ่งเป็นเหตุผลที่ฟังก์ชันนี้มีอยู่แทนที่จะให้ route เขียน
-    UPDATE เอง: กฎ "แก้อะไรก็ต้องขยับ updated" มีเจ้าของคนเดียวต่อคอลัมน์
 
     ไม่เพิกถอนเซสชัน — การเปลี่ยนชื่อที่แสดงไม่กระทบสิทธิ์หรือความน่าเชื่อถือของเซสชัน
 
@@ -1211,8 +1178,7 @@ def resolve_session(con, token: str):
         token (str): ค่าจาก cookie
 
     คอลัมน์ display_name เดินทางมากับ query นี้เพื่อให้ "ฉันเป็นใคร" มีแหล่งเดียว:
-    หัวจอแสดงชื่อคนไม่ใช่ชื่อผู้ใช้ โดยไม่ต้องยิง query ที่สองใน index() ส่วน FROM
-    ไม่ถูกแตะ AUTH_SQL_MARK ของ fault injector จึงยังจับ query นี้ได้เหมือนเดิม
+    หัวจอแสดงชื่อคนไม่ใช่ชื่อผู้ใช้ โดยไม่ต้องยิง query ที่สองใน index()
 
     Returns:
         sqlite3.Row | None: แถวที่มี user_id, username, display_name, role, token, remember
@@ -1640,66 +1606,34 @@ def require_admin(view):
 
 # ────────────────────────────────────────────────
 # สิทธิ์ของแท็บจัดการผู้ใช้งาน
-#
-# กฎทั้งหมดอยู่ในโครงสร้างข้อมูลตัวเดียว (USER_ACTIONS) อ่านด้วยฟังก์ชันบริสุทธิ์
-# ตัวเดียว (permission_problem) ที่ไม่รู้จัก Flask, sqlite3 หรือ g — ทดสอบได้ตรง ๆ
-# ด้วยตารางความจริง และมีผู้อ่านสองทางที่ต้องตอบตรงกันเสมอ: ด่านที่ปฏิเสธ 403
-# กับตัว serialize ที่บอกหน้าจอว่าจะวาดปุ่มไหน ปุ่มที่เห็นจึงเป็น "ผล" ของกฎ
-# ไม่ใช่สำเนาที่สองของกฎในภาษาที่ไม่มีเทสต์ครอบ
-#
-# คำขอตั้งต้นให้ staff "สร้างและแก้ไขได้" ตรง ๆ ซึ่งแปลว่า staff สร้างบัญชี admin
-# หรือรีเซ็ตรหัสผ่าน admin ได้ เส้นแบ่งบทบาทเดียวที่ระบบมีจะหายไปทันที กฎที่บังคับ
-# จริงจึงเป็นกฎอันดับ: **ห้ามให้สิทธิ์สูงกว่าของตัวเอง และห้ามลงมือกับบัญชีที่
-# สิทธิ์สูงกว่าของตัวเอง** บวกข้อห้ามเรื่องบัญชีตัวเองสามข้อที่มีเหตุผลคนละอย่าง
 # ────────────────────────────────────────────────
 
 # ข้อความปฏิเสธ ทุกตัวสั้นกว่า 80 ตัวอักษร — toastError ยกระดับที่ยาวกว่านั้นเป็น
-# alert() ที่ผู้ใช้ต้องกดปิด และทุกตัวเป็นข้อความคงที่ ไม่เคยมีค่าที่ client ส่งมา
-# ประกอบอยู่ข้างใน (ความยาวจึงไม่ขึ้นกับสิ่งที่ใครพิมพ์เข้ามา)
-# FORBIDDEN_MSG ของเดิมถูกใช้ซ้ำสำหรับกรณีบทบาทไม่ถึง ไม่สร้างข้อความที่สองที่พูด
-# เรื่องเดียวกับที่ require_admin พูดอยู่แล้ว
+# alert() ที่ผู้ใช้ต้องกดปิด
 DENY_TARGET_MSG   = 'ทำรายการกับบัญชีของผู้ดูแลระบบไม่ได้'
 DENY_GRANT_MSG    = 'ให้สิทธิ์สูงกว่าบัญชีของตัวเองไม่ได้'
 SELF_PASSWORD_MSG = 'รหัสผ่านของตัวเองเปลี่ยนที่เมนูเปลี่ยนรหัสผ่าน'
 SELF_ROLE_MSG     = 'เปลี่ยนบทบาทของบัญชีตัวเองไม่ได้'
 SELF_ACTIVE_MSG   = 'ปิดหรือเปิดบัญชีของตัวเองไม่ได้'
 
-# ตัวตนของ "คนที่ลงมือ" และของ "บัญชีที่ถูกกระทำ" — ชนิดเดียวกันทั้งสองฝั่ง เพราะกฎ
-# คือการเทียบอันดับของสองสิ่งที่เป็นของอย่างเดียวกัน
-#
-# มีชนิดนี้แทนการส่ง sqlite3.Row เข้าไปตรง ๆ เพราะคีย์ของสองฝั่งไม่เหมือนกัน:
-# g.user ใช้ 'user_id' (มาจาก u.id AS user_id ใน resolve_session) ส่วนแถวในตาราง
-# users ใช้ 'id' การแปลงเป็น Account ที่ขอบทำให้ภายในมีชื่อคีย์ชุดเดียว ถ้าปล่อยให้
-# สลับกันได้ การเทียบ "นี่คือบัญชีของฉันหรือเปล่า" จะเงียบ ๆ ตอบผิด
 Account = namedtuple('Account', 'user_id role')
 
-# min_role     — บทบาทต่ำสุดที่ลงมือได้ โดยยังไม่ดูเป้าหมาย (เทียบด้วย ROLE_RANK)
-# needs_target — ต้องมีบัญชีเป้าหมาย acting_on บังคับว่า route ต้องส่ง uid มา
-# self_denial  — '' = ทำกับบัญชีตัวเองได้, สตริง = ทำไม่ได้ **และนี่คือข้อความที่
-#                ผู้ใช้เห็น** เก็บธงกับเหตุผลไว้ช่องเดียวกันเพื่อไม่ให้มี bool ชุดที่
-#                สองมาเลื่อนออกจากข้อความ และไม่ให้มีสภาพ "ห้ามแต่ไม่มีเหตุผลจะบอก"
-# grants_role  — action นี้มอบบทบาท acting_on บังคับว่า route ต้องบอกว่ามอบบทบาทใด
-# field        — ชื่อช่องใน body ของ PATCH ที่ action นี้กั้นอยู่ ('' = ไม่ใช่ช่อง
-#                ของ PATCH) USER_FIELDS derive มาจากช่องนี้
+# self_denial — '' = ทำกับบัญชีตัวเองได้, สตริง = ทำไม่ได้ **และนี่คือข้อความที่
+#               ผู้ใช้เห็น** (ธงกับเหตุผลอยู่ช่องเดียวกัน จึงเลื่อนออกจากกันไม่ได้)
+# field       — ชื่อช่องใน body ของ PATCH ที่ action นี้กั้นอยู่ ('' = ไม่ใช่ช่องของ PATCH)
 UserAction = namedtuple('UserAction', 'min_role needs_target self_denial grants_role field')
 
-# กฎสิทธิ์ของการจัดการบัญชีทั้งหมดอยู่ที่นี่ ที่เดียว ทั้ง route ทั้ง template ทั้ง CLI
-# เขียนด้วย keyword ทุกตัวโดยตั้งใจ: ลืมฟิลด์ใดจะเป็น TypeError ที่อ่านออกว่าขาดอะไร
-# ไม่ใช่ค่าที่เลื่อนตำแหน่งกันแล้วยังสร้างได้
 USER_ACTIONS = {
-    # ใครที่ล็อกอินได้ก็เห็นว่าใครใช้ระบบนี้อยู่ ไม่ใช่ความลับในสำนักงานเดียวกัน และ
-    # หน้าจอที่เห็นแต่บัญชีตัวเองก็ไม่มีประโยชน์กับใคร
+    # ใครที่ล็อกอินได้ก็เห็นว่าใครใช้ระบบนี้อยู่ ไม่ใช่ความลับในสำนักงานเดียวกัน
     'user.list': UserAction(
         min_role=ROLE_STAFF, needs_target=False, self_denial='',
         grants_role=False, field=''),
 
-    # staff สร้างบัญชีได้ แต่กฎอันดับคุมไว้ว่าสร้างได้แค่ระดับของตัวเอง
     'user.create': UserAction(
         min_role=ROLE_STAFF, needs_target=False, self_denial='',
         grants_role=True, field=''),
 
-    # แก้ชื่อที่แสดงของตัวเองได้ เป็น action เดียวในสี่ตัวที่ยอม เพราะไม่มีทางล็อก
-    # ตัวเองออกจากระบบด้วยการเปลี่ยนชื่อที่แสดงของตัวเอง
+    # แก้ชื่อที่แสดงของตัวเองได้: ไม่มีทางล็อกตัวเองออกจากระบบด้วยการเปลี่ยนชื่อ
     'user.rename': UserAction(
         min_role=ROLE_STAFF, needs_target=True, self_denial='',
         grants_role=False, field='display_name'),
@@ -1725,8 +1659,6 @@ USER_ACTIONS = {
         grants_role=False, field='is_active'),
 }
 
-# derive ไม่ใช่รายการที่เขียนมือ — action ที่เจ็ดเข้ามาเองโดยไม่ต้องมีใครไปเติม
-# ตัว serialize ใช้ตัวนี้คิดว่าแต่ละแถวทำอะไรได้บ้าง (row['can'])
 TARGET_ACTIONS = tuple(a for a, r in USER_ACTIONS.items() if r.needs_target)
 
 
@@ -1734,9 +1666,6 @@ def permission_problem(actor: Account, action: str,
                        target: Account = None, new_role: str = None) -> str:
     """
     ตัดสินว่า actor ทำ action นี้ได้หรือไม่ — ฟังก์ชันบริสุทธิ์ตัวเดียวที่อ่าน USER_ACTIONS
-
-    คืนข้อความไทยหรือ '' รูปแบบเดียวกับ username_problem / password_problem ทั้งตระกูล
-    คนที่มาเขียนโค้ดใหม่แล้วลอกตัวอย่างที่ใกล้ที่สุดจะได้รูปร่างที่ถูก
 
     **ลำดับการตรวจเป็นส่วนหนึ่งของคำตอบ** เพราะข้อความที่ผู้ใช้เห็นต้องเป็นเหตุผลที่
     ตรงที่สุด: staff กดเปลี่ยนบทบาทของแอดมินควรได้ยินว่า "ต้องเป็นผู้ดูแลระบบ"
@@ -1768,7 +1697,6 @@ def permission_problem(actor: Account, action: str,
     if target is None:
         return ''
 
-    # ข้อความอยู่ใน rule เพราะเหตุผลที่ห้ามต่างกันจริงทั้งสาม action
     if target.user_id == actor.user_id and rule.self_denial:
         return rule.self_denial
 
@@ -2149,22 +2077,13 @@ def delete_all():
 
 # ────────────────────────────────────────────────
 # Routes — จัดการผู้ใช้งาน
-#
-# ไม่มี decorator ไหนเลย: require_login เป็น before_request hook ทุก route จึงปิดอยู่
-# แล้ว และ /api/users* ถูก test_every_route_is_closed_without_a_session ลงทะเบียนให้ฟรี
-# เพราะเทสต์นั้นเดิน url_map ไม่ใช่รายการที่เขียนมือ
-#
-# ทั้งสี่ route เริ่มด้วย acting_on() บรรทัดเดียว ซึ่งเป็นที่เดียวที่ connection,
-# เป้าหมาย, การตรวจสิทธิ์, transaction และการปิดเกิดขึ้น — ตรวจด้วยตาได้ว่าไม่มี
-# route ไหนลืม
 # ────────────────────────────────────────────────
 
 USERS_API = '/api/users'
 
 NO_SUCH_USER_MSG = 'ไม่พบบัญชีผู้ใช้ที่ต้องการ'
 BAD_FIELD_MSG    = 'ฟิลด์ที่ส่งมาไม่ถูกต้อง'
-# ตรงกับข้อความของ add_record แบบตัวต่อตัว ไม่ใช่ข้อความใหม่ที่แปลว่าเรื่องเดียวกัน
-BAD_JSON_MSG     = 'ข้อมูลที่ส่งมาไม่ถูกต้อง'
+BAD_JSON_MSG     = 'ข้อมูลที่ส่งมาไม่ถูกต้อง'   # ข้อความเดียวกับ add_record
 LAST_ADMIN_MSG   = 'ต้องเหลือผู้ดูแลระบบที่ใช้งานได้อย่างน้อยหนึ่งบัญชี'
 
 
@@ -2233,15 +2152,11 @@ def json_object_body():
     return body if isinstance(body, dict) else None
 
 
-# ── ช่องที่ PATCH แก้ได้ ───────────────────────────────────────────
-#
 # normalize — ทำค่าที่รับมาให้เป็นมาตรฐานก่อนเทียบ ไม่งั้น 'สมชาย  ใจดี' (ช่องว่าง
 #             สองตัว) จะนับเป็นการเปลี่ยนชื่อทุกครั้งที่กดบันทึก แล้ว updated จะขยับ
 #             โดยที่ไม่มีอะไรเปลี่ยน
-# current   — ค่าปัจจุบันของช่องนั้นในแถว users ในรูปที่เทียบกับค่าใหม่ได้ (is_active
-#             เก็บเป็น 0/1 INTEGER ฝั่ง JSON เป็น boolean)
-# problem   — ด่านตรวจค่าใหม่ คืนข้อความ 422 หรือ ''
-# write     — ตัวที่เขียนลง DB (ไม่ commit ผู้เรียกเป็นเจ้าของ transaction)
+# current   — ค่าปัจจุบันในรูปที่เทียบกับค่าใหม่ได้ (is_active เก็บเป็น 0/1 INTEGER
+#             ฝั่ง JSON เป็น boolean)
 UserField = namedtuple('UserField', 'normalize current problem write')
 
 USER_FIELDS = {
@@ -2256,7 +2171,6 @@ USER_FIELDS = {
                               active_problem, set_active),
 }
 
-# action ที่กั้นแต่ละช่อง derive มาจาก USER_ACTIONS ไม่ใช่รายการคู่ขนาน
 FIELD_ACTIONS = {r.field: a for a, r in USER_ACTIONS.items() if r.field}
 
 
@@ -2334,14 +2248,19 @@ def _patch_plan(body: dict):
 
     Returns:
         function: รับแถวใน users คืน {action: บทบาทที่มอบ | None}
+                  และเก็บสิ่งที่เปลี่ยนจริงไว้ที่ `.changes` ให้ผู้เรียกอ่านต่อ
+                  "อะไรเปลี่ยนบ้าง" จึงถูกตัดสินครั้งเดียว ไม่ใช่ที่นี่ครั้งหนึ่ง
+                  แล้ว route คิดซ้ำอีกครั้ง
     """
     def plan(target):
         changes = user_changes(body, target)
         problem = changes_problem(changes)
         if problem:
             raise UserRequestRefused(422, problem, 'ค่าที่ส่งมาใช้ไม่ได้')
+        plan.changes = changes
         return {FIELD_ACTIONS[f]: (v if USER_ACTIONS[FIELD_ACTIONS[f]].grants_role else None)
                 for f, v in changes.items()}
+    plan.changes = {}
     return plan
 
 
@@ -2364,24 +2283,12 @@ def acting_on(actions, uid: int = None, new_role: str = None):
     """
     เปิดงานหนึ่งชิ้นบนตาราง users — connection, เป้าหมาย, การตรวจสิทธิ์, transaction
 
-    บรรทัดเดียวที่ route เขียนครอบสิบเรื่อง: เปิด connection, อ่านแถวเป้าหมาย,
-    404 เมื่อไม่มี, ตรวจอันดับสิทธิ์ของทุก action ที่ request นี้แปลว่าจะทำ,
-    ตรวจการทำกับบัญชีตัวเอง, body ของคำปฏิเสธ, บรรทัด audit ของคำปฏิเสธ,
-    กฎ "ต้องเหลือแอดมินหนึ่งคน", commit, rollback และ close ใน finally
+    เหตุผลที่เป็น context manager ไม่ใช่ helper:
 
-    ผลพลอยได้สี่ข้อที่เป็นเหตุผลหลักที่มันเป็น context manager ไม่ใช่ helper:
-
-      1. **อะตอม** — "ตั้งรหัสใหม่ + ไล่เซสชันเก่าออก" และ "เปลี่ยนชื่อ + เปลี่ยน
-         บทบาท" อยู่ใน commit เดียว ตามสัญญาของบล็อก primitives ทั้งก้อน
-      2. **audit หลัง commit** — __exit__ commit แล้ว route ค่อยเรียก audit() ต่อจาก
-         บล็อก with ลำดับที่บ้านนี้บังคับจึงถูกโดยโครงสร้าง ไม่ใช่เพราะจำได้
-      3. **ไม่มี TOCTOU** — แถวเป้าหมายถูกอ่านด้วย connection เดียวกับที่เขียน ใน
+      1. **ไม่มี TOCTOU** — แถวเป้าหมายถูกอ่านด้วย connection เดียวกับที่เขียน ใน
          transaction เดียวกัน การอ่าน role ไว้ก่อนแล้วเขียนทีหลังด้วยอีก connection
          เปิดช่องให้บัญชีเลื่อนเป็น admin ระหว่างสองจังหวะ
-      4. **จุดปิดเดียว** — connection ถูกปิดที่ finally ตัวเดียวของทั้งสี่ route
-         ไม่ใช่ `finally: con.close()` ที่ถูกคัดลอกไปวางสี่ครั้ง (ไฟล์นี้เคยเสียท่า
-         กับการคัดลอกนั้นมาแล้วครั้งหนึ่ง — ดูคอมเมนต์ที่ READ_ROUTES ใน test_api.py)
-      5. **กฎ "ต้องเหลือแอดมินที่ใช้งานได้หนึ่งคน" ครอบทุก route พร้อมกัน** กฎ
+      2. **กฎ "ต้องเหลือแอดมินที่ใช้งานได้หนึ่งคน" ครอบทุก route พร้อมกัน** กฎ
          "ห้ามปิดบัญชีตัวเอง" กับ "ห้ามลดบทบาทตัวเอง" เพียงพอถ้าทำทีละคำสั่ง แต่ไม่
          เพียงพอเมื่อเกิดพร้อมกัน: แอดมินสองคนปิดบัญชีกันเองคนละ request ทั้งคู่ผ่าน
          การเช็คของตัวเอง ไม่มีใครนับจำนวนแอดมิน แล้วทั้งคู่ commit ระบบเหลือแอดมิน
@@ -2438,8 +2345,6 @@ def acting_on(actions, uid: int = None, new_role: str = None):
 
         yield con, target
 
-        # นับเฉพาะ request ที่เขียนจริง — GET กับ PATCH ที่ไม่มีอะไรเปลี่ยนไม่ต้องจ่าย
-        # query เพิ่มเพื่อตอบคำถามที่คำตอบเปลี่ยนไม่ได้
         if admins_before and con.total_changes != changed_before \
                 and not _active_admin_count(con):
             raise UserRequestRefused(409, LAST_ADMIN_MSG,
@@ -2479,8 +2384,7 @@ def account_payload(row, actor: Account, now: str) -> dict:
 
     `can` คือรายชื่อ action ที่ actor คนนี้ทำกับแถวนี้ได้ มาจาก permission_problem
     ตัวเดียวกับที่ route ใช้บังคับจริง ปุ่มบนหน้าจอจึงเป็นผลของกฎ ไม่ใช่สำเนาที่สอง
-    ของกฎ (ฝั่ง client ไม่มีการเทียบบทบาทแม้แต่ที่เดียว) วนบน TARGET_ACTIONS ที่
-    derive มาจาก USER_ACTIONS จึงไม่มีรายการที่ต้องเติมตามเมื่อมี action ใหม่
+    ของกฎ (ฝั่ง client ไม่มีการเทียบบทบาทแม้แต่ที่เดียว)
 
     Parameters:
         row:            แถวจาก list_users (มีคอลัมน์ live ด้วย)
@@ -2517,18 +2421,12 @@ def get_users():
     """
     GET /api/users — ทุกบัญชี พร้อมชุดสิทธิ์ของคนที่กำลังดู
 
-    ไม่มี try/except ตามแบบของ read route ทั้งเจ็ดตัวในไฟล์นี้: DB ล้ม → 500 ของ Flask
-    และ apiFetch ฝั่ง client ตกไปที่ 'HTTP 500' เท่ากับของเดิมทุกตัว การทำให้ route นี้
-    ดีขึ้นเฉพาะตัวคือการทำให้มันเป็นตัวที่ผิดแผก
-
     ส่ง envelope ไม่ใช่ array เปล่าแบบ /api/records เพราะ "สิทธิ์ของคนที่กำลังดู" ไม่มี
     ที่อื่นให้อยู่ ทางเลือกคือ endpoint ที่สองหรือสำเนากฎชุดที่สองในภาษา JS
 
     ไม่มี pagination และไม่เรียงฝั่ง server: จำนวนบัญชีในหน่วยงานหนึ่งอยู่ในระดับสิบ
     ไม่ใช่พัน เหตุผลเดียวกับ get_all ของ records และหน้าจอได้เรียง แบ่งหน้า ค้นหา
     ทันทีโดยไม่ต้อง round-trip ต่อการคลิกหัวตารางหนึ่งครั้ง
-
-    ts_now() ถูกเรียกครั้งเดียวสำหรับทั้งหน้า ทุกแถวจึงถูกตัดสินสถานะด้วยเวลาเดียวกัน
 
     ทุกอย่างที่มีลำดับเดินทางเป็น list ของคู่ ไม่ใช่ dict: app.json.sort_keys เป็น True
     ลำดับคีย์ใน dict จะถูกเรียงใหม่ตามตัวอักษร แล้วลำดับใน <select> บทบาทจะไม่ใช่
@@ -2547,8 +2445,6 @@ def get_users():
         'users':    [account_payload(r, actor, now) for r in rows],
         'self_id':  actor.user_id,
         'can_create': not permission_problem(actor, 'user.create', new_role=actor.role),
-        # staff จะไม่เห็น 'ผู้ดูแลระบบ' เป็นตัวเลือกเลย และถ้าปลอม body มาก็ถูก
-        # DENY_GRANT_MSG ปฏิเสธอยู่แล้ว — ปุ่มกับด่านอ่านกฎเดียวกัน
         'grantable_roles': [[r, ROLE_LABELS[r]] for r in ROLES
                             if not permission_problem(actor, 'user.create', new_role=r)],
         'role_labels':   list(ROLE_LABELS.items()),
@@ -2642,16 +2538,14 @@ def patch_user(uid):
     if set(body) - set(USER_FIELDS):
         return jsonify({'error': BAD_FIELD_MSG}), 422
 
+    plan = _patch_plan(body)
     try:
-        with acting_on(_patch_plan(body), uid) as (con, target):
-            # เรียก user_changes ซ้ำครั้งที่สอง (ครั้งแรกอยู่ใน _patch_plan) — มันบริสุทธิ์
-            # อินพุตเดียวกันให้ผลเดียวกัน ถูกกว่าการให้ acting_on ส่งค่าที่ route เดียว
-            # ใช้ออกมาเป็นสมาชิกตัวที่สามของทุก yield
-            changes = user_changes(body, target)
-            for field, value in changes.items():
+        with acting_on(plan, uid) as (con, target):
+            for field, value in plan.changes.items():
                 USER_FIELDS[field].write(con, target['id'], value)
     except sqlite3.Error:
         return fail('patch_user', 'แก้ไขบัญชีผู้ใช้ไม่สำเร็จ')
+    changes = plan.changes
     if changes:
         audit('user_patch', f'id={uid} username={target["username"]} '
                             f'changed={",".join(changes)}')

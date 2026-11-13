@@ -264,7 +264,6 @@ test('กรองจนไม่เหลือ: บอกว่าไม่ต
 
 // ────────────────────────────────────────────────
 // จัดการผู้ใช้งาน
-// สิทธิ์คิดที่ server แล้ว ฝั่งนี้ต้องวาดตาม `can` ที่ได้มา ไม่ใช่เดาจากบทบาท
 // ────────────────────────────────────────────────
 
 const USR = (over = {}) => ({
@@ -303,7 +302,6 @@ test('ทุก data-sort บนหัวตารางบัญชีเป็
   for (const k of keys) {
     assert.ok(k in row, `หัวตารางเรียงด้วย "${k}" ซึ่ง /api/users ไม่ได้ส่งมา`);
   }
-  // เรียงด้วยทุกคีย์แล้วต้องไม่พัง และจำนวนแถวต้องไม่หาย
   mod.setUsersView({ allUsers: [USR({ id: 1 }), USR({ id: 2, username: 'a.b', name: 'ก' })],
                      usersMeta: USR_META([]), usersState: 'loaded', usrPage: 1, usrPerPage: 10 });
   for (const k of keys) {

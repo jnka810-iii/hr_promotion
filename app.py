@@ -428,6 +428,32 @@ def _migrate_blobs_to_files(con):
         raise
 
 
+def _add_missing_columns(con, table: str, cols: dict):
+    """
+    เติมคอลัมน์ที่ยังไม่มีให้ตารางเดิม — กลไก migration แบบเดียวที่ไฟล์นี้ใช้ (ผู้เรียก commit เอง)
+
+    เป็นฟังก์ชันเพราะมีมากกว่าหนึ่งตารางที่ต้องทำเรื่องเดียวกัน การคัดลอกลูปเดิมไป
+    วางอีกชุดคือกลไก migration สองชุดในไฟล์เดียวที่ค่อย ๆ เลื่อนออกจากกัน
+
+    SQLite เพิ่ม CHECK ด้วย ALTER ไม่ได้ (ดูคอมเมนต์ที่ CREATE TABLE users) เงื่อนไข
+    ที่ต้องบังคับจึงต้องไปอยู่ที่ขอบรับข้อมูลหรือเป็น index ท้าย init_db() ไม่ใช่ที่นี่
+    และคอลัมน์ที่เป็น NOT NULL ต้องมี DEFAULT คงที่มาด้วย ไม่งั้น SQLite ปฏิเสธ ALTER
+
+    Parameters:
+        con (sqlite3.Connection): connection ที่เปิดอยู่
+        table (str): ชื่อตาราง — ต่อเข้า SQL ตรง ๆ เพราะ SQLite ไม่รับ placeholder
+                     ที่ชื่อตาราง จึงต้องเป็นค่าคงที่ในไฟล์นี้ **ห้ามรับจาก request**
+        cols (dict): {ชื่อคอลัมน์: นิยามชนิด} ข้อจำกัดเดียวกับ table
+
+    Returns:
+        None
+    """
+    existing = {row[1] for row in con.execute(f'PRAGMA table_info({table})').fetchall()}
+    for col, ctype in cols.items():
+        if col not in existing:
+            con.execute(f'ALTER TABLE {table} ADD COLUMN {col} {ctype}')
+
+
 def _dedupe_attachment_slots(con) -> list:
     """
     รวบแถว attachments ที่ซ้ำคู่ (record_id, book_no) ให้เหลือแถวใหม่สุดแถวเดียว
@@ -551,7 +577,6 @@ def init_db():
             """)
 
         # เพิ่มคอลัมน์ใน records ที่อาจขาดหาย (backward compat)
-        existing = {row[1] for row in con.execute("PRAGMA table_info(records)").fetchall()}
         new_cols = {
             'p3_pos': 'TEXT', 'p3_pos_level': 'TEXT', 'p3_empid': 'TEXT',
             'p3_dept': 'TEXT', 'p3_sec': 'TEXT', 'p3_org': 'TEXT',
@@ -573,9 +598,7 @@ def init_db():
             'p2_empid':       "TEXT NOT NULL DEFAULT ''",
             'p2_dept': 'TEXT', 'p2_sec': 'TEXT', 'p2_org': 'TEXT',
         }
-        for col, ctype in new_cols.items():
-            if col not in existing:
-                con.execute(f'ALTER TABLE records ADD COLUMN {col} {ctype}')
+        _add_missing_columns(con, 'records', new_cols)
 
         # ── ตัวตนและสิทธิ์ ──────────────────────────────
         # อยู่ในไฟล์ DB เดียวกับ records โดยตั้งใจ: _backup_db() สำรองไฟล์เดียว และเทสต์
